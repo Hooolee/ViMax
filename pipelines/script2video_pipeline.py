@@ -8,11 +8,13 @@ from typing import Optional, Dict, List, Tuple, Literal
 from moviepy import VideoFileClip, concatenate_videoclips
 from PIL import Image
 from agents import *
+from agents.best_image_selector import BestImageSelector
 import yaml
 from interfaces import *
-from langchain.chat_models import init_chat_model
+from utils.model_init import init_chat_model_compat
 from utils.timer import Timer
 import importlib
+from utils.timeline import build_timeline, write_timeline_edl, render_timeline
 
 class Script2VideoPipeline:
 
@@ -28,6 +30,7 @@ class Script2VideoPipeline:
         image_generator,
         video_generator,
         working_dir: str,
+        max_shots: int | None = None,
     ):
 
         self.chat_model = chat_model
@@ -39,8 +42,10 @@ class Script2VideoPipeline:
         self.storyboard_artist = StoryboardArtist(chat_model=self.chat_model)
         self.camera_image_generator = CameraImageGenerator(chat_model=self.chat_model, image_generator=self.image_generator, video_generator=self.video_generator)
         self.reference_image_selector = ReferenceImageSelector(chat_model=self.chat_model)
+        self.best_image_selector = BestImageSelector(chat_model=self.chat_model)
 
         self.working_dir = working_dir
+        self.max_shots = max_shots
         os.makedirs(self.working_dir, exist_ok=True)
 
 
@@ -50,11 +55,12 @@ class Script2VideoPipeline:
         cls,
         config_path: str,
     ):
+        from utils.config import resolve_env_vars
         with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
+            config = resolve_env_vars(yaml.safe_load(f))
 
         chat_model_args = config["chat_model"]["init_args"]
-        chat_model = init_chat_model(**chat_model_args)
+        chat_model = init_chat_model_compat(**chat_model_args)
 
         image_generator_cls_module, image_generator_cls_name = config["image_generator"]["class_path"].rsplit(".", 1)
         image_generator_cls = getattr(importlib.import_module(image_generator_cls_module), image_generator_cls_name)
@@ -66,11 +72,18 @@ class Script2VideoPipeline:
         video_generator_args = config["video_generator"]["init_args"]
         video_generator = video_generator_cls(**video_generator_args)
 
+        # optional shot limiter for validation/cost control
+        max_shots = None
+        cfg_max_shots = config.get("max_shots")
+        if isinstance(cfg_max_shots, int) and cfg_max_shots > 0:
+            max_shots = cfg_max_shots
+
         return cls(
             chat_model=chat_model,
             image_generator=image_generator,
             video_generator=video_generator,
             working_dir=config["working_dir"],
+            max_shots=max_shots,
         )
 
     async def __call__(
@@ -134,6 +147,22 @@ class Script2VideoPipeline:
             shot_descriptions=shot_descriptions,
         )
 
+        # continuity checks (180/30 degree rules)
+        from utils.continuity import check_continuity
+        print("🔎 Running continuity checks (180/30-degree)...")
+        continuity_report = check_continuity(shot_descriptions, camera_tree)
+        continuity_report_path = os.path.join(self.working_dir, "continuity_report.json")
+        with open(continuity_report_path, "w", encoding="utf-8") as f:
+            json.dump(continuity_report, f, ensure_ascii=False, indent=4)
+        if not continuity_report.get("passed", False):
+            print("❌ Continuity check failed. See continuity_report.json for details.")
+            for v in continuity_report.get("violations", []):
+                print(f" - [Shot {v.get('shot_idx')}] {v.get('type')}: {v.get('message')} | 建议: {v.get('suggestion')}")
+            # do not continue to frame generation when failed
+            raise RuntimeError("Continuity violations detected; aborting frame generation.")
+        else:
+            print("✅ Continuity checks passed.")
+
         priority_shot_idxs = [camera.parent_cam_idx for camera in camera_tree if camera.parent_cam_idx is not None]
         tasks = [
             self.generate_frames_for_single_camera(
@@ -156,17 +185,17 @@ class Script2VideoPipeline:
         await asyncio.gather(*tasks)
 
         final_video_path = os.path.join(self.working_dir, "final_video.mp4")
-        if os.path.exists(final_video_path):
-            print(f"🚀 Skipped concatenating videos, already exists.")
+        timeline_edl_path = os.path.join(self.working_dir, "timeline.edl")
+        if os.path.exists(final_video_path) and os.path.exists(timeline_edl_path):
+            print(f"🚀 Skipped rendering; final video & EDL already exist.")
         else:
-            print(f"🎬 Starting concatenating videos...")
-            video_clips = [
-                VideoFileClip(os.path.join(self.working_dir, "shots", f"{shot_description.idx}", "video.mp4"))
-                for shot_description in shot_descriptions
-            ]
-            final_video = concatenate_videoclips(video_clips)
-            final_video.write_videofile(final_video_path, codec="libx264", preset="medium")
-            print(f"☑️ Concatenated videos, saved to {final_video_path}.")
+            print(f"🎬 Building timeline and rendering final video...")
+            timeline = build_timeline(shot_descriptions, self.working_dir)
+            with open(os.path.join(self.working_dir, "timeline.json"), 'w', encoding='utf-8') as f:
+                json.dump(timeline, f, ensure_ascii=False, indent=4)
+            write_timeline_edl(timeline, timeline_edl_path)
+            render_timeline(timeline, final_video_path)
+            print(f"☑️ Rendered final video using timeline, saved to {final_video_path}. EDL: {timeline_edl_path}")
 
         return final_video_path
 
@@ -392,13 +421,47 @@ class Script2VideoPipeline:
             prompt = f"{prefix_prompt}\n{prompt}"
             reference_image_paths = [item[0] for item in reference_image_path_and_text_pairs]
 
-            frame_image: ImageOutput = await self.image_generator.generate_single_image(
-                prompt=prompt,
-                reference_image_paths=reference_image_paths,
-                size="1600x900",
-            )
-            frame_image.save(frame_image_path)
-            print(f"☑️ Generated {frame_type} frame for shot {shot_idx}, saved to {frame_image_path}.")
+            # multi-sample and select best
+            n_candidates = 3
+            shot_dir = os.path.join(self.working_dir, "shots", f"{shot_idx}")
+            candidate_paths = []
+            for k in range(n_candidates):
+                candidate_output: ImageOutput = await self.image_generator.generate_single_image(
+                    prompt=prompt,
+                    reference_image_paths=reference_image_paths,
+                    size="1600x900",
+                )
+                candidate_path = os.path.join(shot_dir, f"{frame_type}_candidate_{k}.png")
+                candidate_output.save(candidate_path)
+                candidate_paths.append(candidate_path)
+
+            # select best using BestImageSelector
+            reference_image_path_and_text_pairs = selector_output["reference_image_path_and_text_pairs"]
+            selection_reason = {
+                "selected": None,
+                "reason": None,
+                "candidates": candidate_paths,
+            }
+            try:
+                best_path = await self.best_image_selector(
+                    reference_image_path_and_text_pairs=reference_image_path_and_text_pairs,
+                    target_description=frame_desc,
+                    candidate_image_paths=candidate_paths,
+                )
+                selection_reason["selected"] = best_path
+                selection_reason["reason"] = getattr(self.best_image_selector, "last_reason", None)
+            except Exception as e:
+                print(f"⚠️ Best image selection failed for shot {shot_idx} {frame_type}, fallback to first candidate. Error: {e}")
+                best_path = candidate_paths[0]
+                selection_reason["selected"] = best_path
+                selection_reason["reason"] = f"fallback_first_candidate_due_to_error: {e}"
+
+            # persist reason and finalize chosen frame
+            selection_reason_path = os.path.join(shot_dir, f"{frame_type}_selection_reason.json")
+            with open(selection_reason_path, 'w', encoding='utf-8') as f:
+                json.dump(selection_reason, f, ensure_ascii=False, indent=4)
+            shutil.copy(best_path, frame_image_path)
+            print(f"☑️ Generated {frame_type} frame for shot {shot_idx}, saved to {frame_image_path} (best of {n_candidates}).")
 
 
         self.frame_events[shot_idx][frame_type].set()
@@ -565,6 +628,10 @@ class Script2VideoPipeline:
             with open(storyboard_path, 'w', encoding='utf-8') as f:
                 json.dump([shot.model_dump() for shot in storyboard], f, ensure_ascii=False, indent=4)
             print(f"✅ Designed storyboard and saved to {storyboard_path}.")
+
+        # apply shot limit if configured
+        if self.max_shots is not None:
+            storyboard = storyboard[: self.max_shots]
 
         for shot_brief_description in storyboard:
             self.shot_desc_events[shot_brief_description.idx] = asyncio.Event()

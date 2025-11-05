@@ -15,10 +15,14 @@ class VideoGeneratorDoubaoSeedanceOfficialAPI:
       - Create task: POST {base_url}/tasks
       - Query task:  GET  {base_url}/tasks/{id}
 
-    The adapter supports:
-      - Text-to-video (0 reference images)
-      - First-frame image-to-video (1 reference image)
-      - First/last-frame image-to-video (2 reference images)
+    The adapter supports official Doubao (Ark) modes per latest docs:
+      - doubao-seedance-pro-fast:
+          * Text-to-video (0 ref)
+          * Image-to-video First-Frame (1 ref)
+      - doubao-seedance-1-0-lite-i2v:
+          * Image-to-video Reference-Images NEW (1-4 refs)
+          * Image-to-video First/Last-Frame (2 refs)
+          * Image-to-video First-Frame (1 ref)
 
     Returned value is a VideoOutput with fmt="url" that contains the video URL.
     """
@@ -26,16 +30,14 @@ class VideoGeneratorDoubaoSeedanceOfficialAPI:
     def __init__(
         self,
         api_key: str,
-        # Official model name; update as needed
-        t2v_model: str = "doubao-seedance-1-0-pro-fast-251015",
-        ff2v_model: str = "doubao-seedance-1-0-pro-fast-251015",
-        flf2v_model: str = "doubao-seedance-1-0-pro-fast-251015",
+        # Official model names (can be overridden via config)
+        pro_model: str = "doubao-seedance-pro-fast",
+        lite_i2v_model: str = "doubao-seedance-1-0-lite-i2v",
         base_url: str = "https://ark.cn-beijing.volces.com/api/v3/contents/generations",
     ):
         self.api_key = api_key
-        self.t2v_model = t2v_model
-        self.ff2v_model = ff2v_model
-        self.flf2v_model = flf2v_model
+        self.pro_model = pro_model
+        self.lite_i2v_model = lite_i2v_model
         self.base_url = base_url.rstrip("/")
 
     async def create_video_generation_task(
@@ -52,16 +54,20 @@ class VideoGeneratorDoubaoSeedanceOfficialAPI:
         Create a task on the official Ark endpoint and return the task ID.
         The Ark API expects the control flags embedded in the text content.
         """
-        if len(reference_image_paths) == 0:
-            model = self.t2v_model
-        elif len(reference_image_paths) == 1:
-            model = self.ff2v_model
-        elif len(reference_image_paths) == 2:
-            model = self.flf2v_model
-        else:
-            raise ValueError("reference_image_paths must contain 0, 1 or 2 images.")
+        # Map number of refs to official model
+        def pick_model(n: int) -> str:
+            if n <= 0:
+                return self.pro_model  # text-to-video
+            if n == 1:
+                return self.pro_model  # first-frame i2v
+            # n >= 2 uses lite i2v (supports 2=first+last, 1-4 refs new)
+            return self.lite_i2v_model
 
-        logging.info(f"Calling {model} (official Ark) to generate video...")
+        # Cap refs to 4 per lite-i2v spec for reference-images new
+        max_refs = 4
+        ref_count = min(len(reference_image_paths), max_refs)
+        model = pick_model(ref_count)
+        logging.info(f"Calling {model} (official Ark) to generate video with {ref_count} ref(s)...")
 
         # Compose flags per official examples
         flags = [
@@ -92,28 +98,24 @@ class VideoGeneratorDoubaoSeedanceOfficialAPI:
                 return None
 
         image_urls: List[str] = []
-        if len(reference_image_paths) >= 1:
-            u0 = to_image_url(reference_image_paths[0])
-            if u0:
-                image_urls.append(u0)
-        if len(reference_image_paths) >= 2:
-            u1 = to_image_url(reference_image_paths[1])
-            if u1:
-                image_urls.append(u1)
+        for p in reference_image_paths[:max_refs]:
+            u = to_image_url(p)
+            if u:
+                image_urls.append(u)
 
         # Build candidate payloads with decreasing conditioning: [2 imgs] -> [1 img] -> [0 img]
         def build_payload(urls: List[str]):
             _content = [text_item]
             for u in urls:
                 _content.append({"type": "image_url", "image_url": {"url": u}})
-            return {"model": model, "content": _content}
+            # re-pick model for current number of refs in case we are degrading
+            m = pick_model(len(urls))
+            return {"model": m, "content": _content}
 
         candidate_payloads = []
-        if len(image_urls) >= 2:
-            candidate_payloads.append(build_payload(image_urls[:2]))
-        if len(image_urls) >= 1:
-            candidate_payloads.append(build_payload(image_urls[:1]))
-        candidate_payloads.append(build_payload([]))
+        # Start with all refs (up to 4), then degrade to fewer refs, finally to text-only
+        for n in range(len(image_urls), -1, -1):
+            candidate_payloads.append(build_payload(image_urls[:n]))
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",

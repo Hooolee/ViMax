@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Literal, Tuple
 
 
@@ -16,6 +16,76 @@ class ShotBriefDescription(BaseModel):
     cam_idx: int = Field(
         description="The index of the camera in the scene.",
         examples=[0, 1, 2],
+    )
+    # cinematography parameters
+    shot_size: Literal[
+        "extreme_long",
+        "long",
+        "medium_long",
+        "medium",
+        "medium_close",
+        "close_up",
+        "extreme_close_up",
+    ] = Field(
+        description="Shot size category describing framing scale.",
+        examples=["medium", "close_up", "long"],
+    )
+    angle: Literal[
+        "low",
+        "eye_level",
+        "high",
+        "bird_eye",
+        "worm_eye",
+        "dutch",
+    ] = Field(
+        description="Primary camera angle relative to the subject/ground.",
+        examples=["eye_level", "low", "high"],
+    )
+    camera_height: Literal[
+        "ground",
+        "knee",
+        "waist",
+        "chest",
+        "shoulder",
+        "eye",
+        "overhead",
+    ] = Field(
+        description="Approximate camera physical height reference.",
+        examples=["eye", "waist"],
+    )
+    lens_equiv_mm: int = Field(
+        description="Approximate 35mm equivalent focal length (in millimeters).",
+        ge=8,
+        le=300,
+        examples=[18, 24, 35, 50, 85, 135],
+    )
+    screen_direction: Literal[
+        "L_to_R",
+        "R_to_L",
+        "toward",
+        "away",
+        "static",
+    ] = Field(
+        description="Dominant on-screen movement or facing direction for continuity.",
+        examples=["L_to_R", "toward", "static"],
+    )
+    transition_in: Literal["cut", "fade", "dissolve", "wipe", "none"] = Field(
+        description="Transition type entering this shot.",
+        examples=["cut", "fade"],
+    )
+    transition_out: Literal["cut", "fade", "dissolve", "wipe", "none"] = Field(
+        description="Transition type leaving this shot.",
+        examples=["cut", "dissolve"],
+    )
+    beat: Literal["slow", "moderate", "fast"] = Field(
+        description="Perceived pacing/tempo of the shot.",
+        examples=["moderate"],
+    )
+    duration_sec_estimate: float = Field(
+        description="Estimated shot duration in seconds.",
+        gt=0.3,
+        le=30.0,
+        examples=[2.5, 4.0, 8.0],
     )
     visual_desc: str = Field(
         description='''A vivid and detailed visual description of the shot that convey rich visual information through text. The character identifiers in the description must match those in the character list and be enclosed in angle brackets (e.g., <Alice>, <Bob>). All visible characters should be described.
@@ -82,6 +152,7 @@ class ShotBriefDescription(BaseModel):
     def __str__(self):
         s = f"Shot {self.idx}:\n"
         s += f"Camera Index: {self.cam_idx}\n"
+        s += f"Shot Size: {self.shot_size}; Angle: {self.angle}; Height: {self.camera_height}; Focal: {self.lens_equiv_mm}mm; Dir: {self.screen_direction}; In: {self.transition_in}; Out: {self.transition_out}; Beat: {self.beat}; Dur: {self.duration_sec_estimate}s\n"
         s += f"Visual: {self.visual_desc}\n"
         if self.sound_effect is not None or self.speaker is not None:
             s += f"Audio:"
@@ -104,6 +175,55 @@ class ShotDescription(BaseModel):
     cam_idx: int = Field(
         description="The index of the camera in the scene.",
         examples=[0, 1, 2],
+    )
+    # propagate cinematography parameters to detailed shot description
+    shot_size: Literal[
+        "extreme_long",
+        "long",
+        "medium_long",
+        "medium",
+        "medium_close",
+        "close_up",
+        "extreme_close_up",
+    ] = Field(
+        description="Shot size category describing framing scale.",
+        examples=["medium", "close_up", "long"],
+    )
+    angle: Literal["low", "eye_level", "high", "bird_eye", "worm_eye", "dutch"] = Field(
+        description="Primary camera angle relative to the subject/ground.",
+        examples=["eye_level", "low", "high"],
+    )
+    camera_height: Literal["ground", "knee", "waist", "chest", "shoulder", "eye", "overhead"] = Field(
+        description="Approximate camera physical height reference.",
+        examples=["eye", "waist"],
+    )
+    lens_equiv_mm: int = Field(
+        description="Approximate 35mm equivalent focal length (in millimeters).",
+        ge=8,
+        le=300,
+        examples=[18, 24, 35, 50, 85, 135],
+    )
+    screen_direction: Literal["L_to_R", "R_to_L", "toward", "away", "static"] = Field(
+        description="Dominant on-screen movement or facing direction for continuity.",
+        examples=["L_to_R", "toward", "static"],
+    )
+    transition_in: Literal["cut", "fade", "dissolve", "wipe", "none"] = Field(
+        description="Transition type entering this shot.",
+        examples=["cut", "fade"],
+    )
+    transition_out: Literal["cut", "fade", "dissolve", "wipe", "none"] = Field(
+        description="Transition type leaving this shot.",
+        examples=["cut", "dissolve"],
+    )
+    beat: Literal["slow", "moderate", "fast"] = Field(
+        description="Perceived pacing/tempo of the shot.",
+        examples=["moderate"],
+    )
+    duration_sec_estimate: float = Field(
+        description="Estimated shot duration in seconds.",
+        gt=0.3,
+        le=30.0,
+        examples=[2.5, 4.0, 8.0],
     )
     visual_desc: str = Field(
         description='''A vivid and detailed visual description of the shot that convey rich visual information through text. The character identifiers in the description must match those in the character list and be enclosed in angle brackets (e.g., <Alice>, <Bob>).
@@ -187,3 +307,11 @@ class ShotDescription(BaseModel):
     #     default=None,
     #     description="The emotion of the speaker when delivering the line, if applicable. If there is a speaker, there must be an emotion. If there is no speaker, this field should be set to None.",
     # )
+
+    @field_validator("duration_sec_estimate")
+    @classmethod
+    def _validate_duration(cls, v: float) -> float:
+        # ensure a reasonable decimal precision and positive value
+        if v <= 0:
+            raise ValueError("duration_sec_estimate must be positive")
+        return round(float(v), 2)

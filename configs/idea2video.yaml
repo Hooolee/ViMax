@@ -1,9 +1,9 @@
 chat_model:
   init_args:
-    model: deepseek-chat
-    model_provider: openai
-    api_key: sk-028228020d844ff58d283cc882d6241b
-    base_url: https://api.deepseek.com/v1
+    model: gemini-2.5-pro
+    model_provider: gemini # custom alias; mapped to google_genai by utils/model_init.py
+    api_key: sk-123
+    base_url: http://127.0.0.1:5345 # ignored for gemini alias; use HTTPS_PROXY for forward proxy if needed
 
 image_generator:
   class_path: tools.ImageGeneratorNanobananaGoogleAPI
@@ -17,3 +17,7 @@ video_generator:
     api_key: ab2ffe0d-3449-4baa-b79d-6d4c9eb03432
 
 working_dir: .working_dir/idea2video
+
+# Limit the number of scene scripts to process in Idea2Video for cost control.
+# Set to 1 to only generate the first scene for validation. Omit or set to 0 to process all scenes.
+max_scenes: 1

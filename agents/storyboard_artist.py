@@ -42,6 +42,7 @@ The user will provide the following input.
 - Ensure all output values (except keys) match the language used in the script.
 - Each shot must have a clear narrative purpose—such as establishing the setting, showing character relationships, or highlighting reactions.
 - Use cinematic language deliberately: close-ups for emotion, wide shots for context, and varied angles to direct audience attention.
+- For each shot, explicitly set cinematography parameters: `shot_size`, `angle`, `camera_height`, `lens_equiv_mm` (35mm equivalent), `screen_direction` (e.g., L_to_R / R_to_L / toward / away / static), `transition_in`, `transition_out`, `beat` (slow/moderate/fast), and `duration_sec_estimate` (in seconds).
 - When designing a new shot, first consider whether it can be filmed using an existing camera position. Introduce a new one only if the shot size, angle, and focus differ significantly. If the camera undergoes significant movement, it cannot be used thereafter.
 - Keep character names in visual descriptions and speaker fields consistent with the character list. In visual descriptions, enclose names in angle brackets (e.g., <Alice>), but not in dialogue or speaker fields.
 - When describing visual elements, it is necessary to indicate the position of the element within the frame. For example, Character A is on the left side of the frame, facing toward the right, with a table in front of him. The table is positioned slightly to the left of the center of the frame. Ensure that invisible elements are not included. For instance, do not describe someone behind a closed door if they cannot be seen.
@@ -245,6 +246,15 @@ class StoryboardArtist:
             idx=shot_brief_desc.idx,
             is_last=shot_brief_desc.is_last,
             cam_idx=shot_brief_desc.cam_idx,
+            shot_size=shot_brief_desc.shot_size,
+            angle=shot_brief_desc.angle,
+            camera_height=shot_brief_desc.camera_height,
+            lens_equiv_mm=shot_brief_desc.lens_equiv_mm,
+            screen_direction=shot_brief_desc.screen_direction,
+            transition_in=shot_brief_desc.transition_in,
+            transition_out=shot_brief_desc.transition_out,
+            beat=shot_brief_desc.beat,
+            duration_sec_estimate=shot_brief_desc.duration_sec_estimate,
             visual_desc=shot_brief_desc.visual_desc,
             variation_type=decomposition.variation_type,
             variation_reason=decomposition.variation_reason,

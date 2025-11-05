@@ -47,7 +47,9 @@ Shot 1: Close-up of the Alice's face. Her expression shifts from surprise to del
 [Guidelines]
 - The language of all output values (not include keys) should be consistent with the language of the input.
 - Content Inclusion Check: The parent camera should as fully as possible contain the child camera's content in certain shots (e.g., a parent medium two-shot encompasses a child over-the-shoulder reverse shot). Analyze shot descriptions by comparing keywords (e.g., characters, actions, setting) to ensure the parent shot's field of view covers the child shot's.
-- Transition Smoothness Priority: Larger shot size as parent camera is preferred, such as Wide Shot -> Medium Shot or Medium Shot -> Close-up. The shot sizes of adjacent parent and child nodes should be as similar as possible. A direct transition from a long shot to a close-up is not allowed unless absolutely necessary.
+- Transition Smoothness Priority: Prefer parents with equal or wider framing. Avoid drastic jumps; do NOT directly connect extreme_long/long to close_up/extreme_close_up unless absolutely necessary. Keep adjacent sizes within two levels when possible.
+- Axis Consistency: Respect the 180-degree rule using `dir=` hints (L_to_R / R_to_L / toward / away / static). Prefer a parent whose direction matches the child.
+- Distance/Angle/Focal Restraints: Consider `angle=` and `focal=` (35mm equivalent). Avoid jumps greater than ~3x focal length or extreme angle flips without an intermediate.
 - Temporal Proximity: Each camera is described by its corresponding first shot, and the parent camera is located based on the description of the first shot. The shot index of the parent camera should be as close as possible to the first shot index of the child camera.
 - Logical Consistency: The camera tree should be acyclic, avoid circular dependencies. If a camera is contained by multiple potential parents, select the best match (based on shot size and content). If there is no suitable parent camera, output None.
 - When a broader perspective is not available, choose the shot with the largest overlapping field of view as the parent (the one with the most information overlap), or a shot can also serve as the parent of a reverse shot. When two cameras can be the parent of each other, choose the one with the smaller index as the parent of the camera with the larger index.
@@ -124,7 +126,12 @@ class CameraImageGenerator:
         for cam in cameras:
             camera_seq_str += f"<CAMERA_{cam.idx}>\n"
             for shot_idx in cam.active_shot_idxs:
-                camera_seq_str += f"Shot {shot_idx}: {shot_descs[shot_idx].visual_desc}\n"
+                sd = shot_descs[shot_idx]
+                # provide cinematography parameters to improve reasoning for axis/size/focal constraints
+                camera_seq_str += (
+                    f"Shot {shot_idx}: [size={sd.shot_size}, angle={sd.angle}, focal={sd.lens_equiv_mm}mm, dir={sd.screen_direction}] "
+                    f"{sd.visual_desc}\n"
+                )
             camera_seq_str += f"</CAMERA_{cam.idx}>\n"
         camera_seq_str += "</CAMERA_SEQ>"
 
@@ -142,6 +149,68 @@ class CameraImageGenerator:
             cam.parent_shot_idx = parent_cam_item.parent_shot_idx if parent_cam_item is not None else None
             cam.is_parent_fully_covers_child = parent_cam_item.is_parent_fully_covers_child if parent_cam_item is not None else None
             cam.missing_info = parent_cam_item.missing_info if parent_cam_item is not None else None
+        
+        # Post-enforcement: ensure constraints and avoid drastic jumps without parent
+        size_rank = {
+            "extreme_long": 0,
+            "long": 1,
+            "medium_long": 2,
+            "medium": 3,
+            "medium_close": 4,
+            "close_up": 5,
+            "extreme_close_up": 6,
+        }
+
+        def find_best_parent(child_cam: Camera):
+            child_first = child_cam.active_shot_idxs[0]
+            sd_child = shot_descs[child_first]
+            best = (None, None, None)
+            best_score = 1e9
+            for pcam in cameras:
+                if pcam.idx == child_cam.idx:
+                    continue
+                for ps in pcam.active_shot_idxs:
+                    if ps > child_first:
+                        continue
+                    sd_p = shot_descs[ps]
+                    sr_p = size_rank.get(sd_p.shot_size, 3)
+                    sr_c = size_rank.get(sd_child.shot_size, 3)
+                    width_penalty = max(0, sr_p - sr_c) * 3  # prefer equal/wider
+                    dir_penalty = 0 if sd_p.screen_direction == sd_child.screen_direction else 5
+                    time_penalty = abs(child_first - ps)
+                    score = time_penalty + width_penalty + dir_penalty
+                    if score < best_score:
+                        best = (pcam.idx, ps, f"Auto-selected parent by heuristic (score={score})")
+                        best_score = score
+            return best
+
+        for cam in cameras:
+            if cam.idx == cameras[0].idx:
+                cam.parent_cam_idx = None
+                cam.parent_shot_idx = None
+                continue
+            if cam.parent_cam_idx is None or cam.parent_shot_idx is None:
+                p_cam_idx, p_shot_idx, why = find_best_parent(cam)
+                if p_cam_idx is not None:
+                    cam.parent_cam_idx = p_cam_idx
+                    cam.parent_shot_idx = p_shot_idx
+                    cam.reason = (cam.reason + "; " if cam.reason else "") + (why or "")
+
+            if cam.parent_cam_idx is not None and cam.parent_shot_idx is not None:
+                child_first = cam.active_shot_idxs[0]
+                sd_child = shot_descs[child_first]
+                sd_parent = shot_descs[cam.parent_shot_idx]
+                sr_p = size_rank.get(sd_parent.shot_size, 3)
+                sr_c = size_rank.get(sd_child.shot_size, 3)
+                size_gap = abs(sr_c - sr_p)
+                pr = sd_parent.lens_equiv_mm or 1
+                cr = sd_child.lens_equiv_mm or 1
+                focal_ratio = (cr / pr) if cr >= pr else (pr / cr)
+                if size_gap > 2 or focal_ratio > 3:
+                    cam.is_parent_fully_covers_child = False
+                    gap_msg = f"size_gap={size_gap}, focal_ratio~{focal_ratio:.1f}"
+                    cam.missing_info = (cam.missing_info + "; " if cam.missing_info else "") + f"Large change detected ({gap_msg}); insert transition."
+
         return cameras
 
 

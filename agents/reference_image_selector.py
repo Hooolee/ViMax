@@ -1,5 +1,6 @@
 import logging
-from typing import List, Tuple
+import re
+from typing import List, Tuple, Dict, Any
 from tenacity import retry, stop_after_attempt
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -140,7 +141,7 @@ class ReferenceImageSelector:
         self,
         chat_model,
     ):
-
+        
         self.chat_model = chat_model
 
 
@@ -213,6 +214,15 @@ class ReferenceImageSelector:
         try:
             response = await chain.ainvoke(messages)
             reference_image_path_and_text_pairs = [filtered_image_path_and_text_pairs[i] for i in response.ref_image_indices]
+
+            # Strict mapping validation and warnings
+            self._validate_prompt_mapping(
+                text_prompt=response.text_prompt,
+                ref_count=len(response.ref_image_indices),
+                frame_description=frame_description,
+                selected_pairs=reference_image_path_and_text_pairs,
+            )
+
             return {
                 "reference_image_path_and_text_pairs": reference_image_path_and_text_pairs,
                 "text_prompt": response.text_prompt,
@@ -237,8 +247,61 @@ class ReferenceImageSelector:
 
             response = await (self.chat_model | parser).ainvoke(text_only_messages)
             reference_image_path_and_text_pairs = [filtered_image_path_and_text_pairs[i] for i in response.ref_image_indices]
+
+            # Strict mapping validation and warnings
+            self._validate_prompt_mapping(
+                text_prompt=response.text_prompt,
+                ref_count=len(response.ref_image_indices),
+                frame_description=frame_description,
+                selected_pairs=reference_image_path_and_text_pairs,
+            )
+
             return {
                 "reference_image_path_and_text_pairs": reference_image_path_and_text_pairs,
                 "text_prompt": response.text_prompt,
             }
 
+    def _validate_prompt_mapping(
+        self,
+        text_prompt: str,
+        ref_count: int,
+        frame_description: str,
+        selected_pairs: List[Tuple[str, str]],
+    ) -> None:
+        """
+        Enforce that text_prompt explicitly maps elements to Image N
+        and indices are within range of selected references. Log warnings
+        for missing character element mappings.
+        """
+        # 1) extract referenced image indices in prompt
+        indices = [int(m.group(1)) for m in re.finditer(r"\bImage\s+(\d+)\b", text_prompt)]
+        if not indices:
+            raise ValueError("text_prompt missing explicit 'Image N' mappings")
+        if any(i < 0 or i >= ref_count for i in indices):
+            raise ValueError("text_prompt references out-of-range 'Image N' index")
+
+        # 2) character elements in frame description (like <Alice>)
+        char_ids = list(dict.fromkeys(re.findall(r"<([^>]+)>", frame_description)))
+        if char_ids:
+            # map selected pair index -> text
+            sel_texts = [t for _, t in selected_pairs]
+            mapped_any = False
+            for cid in char_ids:
+                # does any selected image describe this character?
+                hits = [j for j, t in enumerate(sel_texts) if cid in t]
+                if not hits:
+                    logging.warning(
+                        f"Reference prompt: no selected reference image text contains character '{cid}'."
+                    )
+                    continue
+                # does prompt mention an Image N that points to any of these hits?
+                # i.e., is any index in 'indices' one of the j positions
+                if any(j in indices for j in hits):
+                    mapped_any = True
+                else:
+                    logging.warning(
+                        f"Reference prompt: character '{cid}' not explicitly mapped to any Image N in text_prompt."
+                    )
+            # require at least one character mapping to avoid total omission
+            if not mapped_any:
+                raise ValueError("text_prompt lacks explicit mapping for any visible character element")

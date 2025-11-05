@@ -8,7 +8,7 @@ import asyncio
 import json
 from moviepy import VideoFileClip, concatenate_videoclips
 import yaml
-from langchain.chat_models import init_chat_model
+from utils.model_init import init_chat_model_compat
 import importlib
 
 class Idea2VideoPipeline:
@@ -18,11 +18,13 @@ class Idea2VideoPipeline:
         image_generator: str,
         video_generator: str,
         working_dir: str,
+        max_scenes: int | None = None,
     ):
         self.chat_model = chat_model
         self.image_generator = image_generator
         self.video_generator = video_generator
         self.working_dir = working_dir
+        self.max_scenes = max_scenes
         os.makedirs(self.working_dir, exist_ok=True)
 
         self.screenwriter = Screenwriter(chat_model=self.chat_model)
@@ -34,11 +36,12 @@ class Idea2VideoPipeline:
         cls,
         config_path: str,
     ):
+        from utils.config import resolve_env_vars
         with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
+            config = resolve_env_vars(yaml.safe_load(f))
 
         chat_model_args = config["chat_model"]["init_args"]
-        chat_model = init_chat_model(**chat_model_args)
+        chat_model = init_chat_model_compat(**chat_model_args)
 
         image_generator_cls_module, image_generator_cls_name = config["image_generator"]["class_path"].rsplit(".", 1)
         image_generator_cls = getattr(importlib.import_module(image_generator_cls_module), image_generator_cls_name)
@@ -50,11 +53,19 @@ class Idea2VideoPipeline:
         video_generator_args = config["video_generator"]["init_args"]
         video_generator = video_generator_cls(**video_generator_args)
 
+        # optional validation/limiter config
+        max_scenes = None
+        if isinstance(config.get("max_scenes"), int) and config["max_scenes"] > 0:
+            max_scenes = config["max_scenes"]
+        elif config.get("validate_first_scene") is True:
+            max_scenes = 1
+
         return cls(
             chat_model=chat_model,
             image_generator=image_generator,
             video_generator=video_generator,
             working_dir=config["working_dir"],
+            max_scenes=max_scenes,
         )
 
     async def extract_characters(
@@ -220,7 +231,12 @@ class Idea2VideoPipeline:
 
         all_video_paths = []
 
-        for idx, scene_script in enumerate(scene_scripts):
+        # optionally limit scenes for validation/cost control
+        limited_scene_scripts = scene_scripts
+        if self.max_scenes is not None:
+            limited_scene_scripts = scene_scripts[: self.max_scenes]
+
+        for idx, scene_script in enumerate(limited_scene_scripts):
             scene_working_dir = os.path.join(self.working_dir, f"scene_{idx}")
             os.makedirs(scene_working_dir, exist_ok=True)
             script2video_pipeline = Script2VideoPipeline(
@@ -242,9 +258,16 @@ class Idea2VideoPipeline:
         if os.path.exists(final_video_path):
             print(f"🚀 Skipped concatenating videos, already exists.")
         else:
-            print(f"🎬 Starting concatenating videos...")
-            video_clips = [VideoFileClip(final_video_path) for final_video_path in all_video_paths]
-            final_video = concatenate_videoclips(video_clips)
-            final_video.write_videofile(final_video_path)
-            print(f"☑️ Concatenated videos, saved to {final_video_path}.")
+            if len(all_video_paths) == 1:
+                # single-scene validation: just copy/rename by re-encode using moviepy for consistency
+                print(f"🎬 Single-scene output; writing final_video.mp4 from the only scene...")
+                clip = VideoFileClip(all_video_paths[0])
+                clip.write_videofile(final_video_path)
+                print(f"☑️ Wrote single-scene final video to {final_video_path}.")
+            else:
+                print(f"🎬 Starting concatenating videos...")
+                video_clips = [VideoFileClip(path) for path in all_video_paths]
+                final_video = concatenate_videoclips(video_clips)
+                final_video.write_videofile(final_video_path)
+                print(f"☑️ Concatenated videos, saved to {final_video_path}.")
         return final_video_path

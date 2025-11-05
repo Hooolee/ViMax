@@ -2,19 +2,21 @@ chat_model:
   init_args:
     model: google/gemini-2.5-flash-lite-preview-09-2025
     model_provider: openai
-    api_key: 
+    api_key:
     base_url: https://openrouter.ai/api/v1
-
 
 image_generator:
   class_path: tools.ImageGeneratorNanobananaGoogleAPI
   init_args:
-    api_key: 
-
+    api_key:
 
 video_generator:
   class_path: tools.VideoGeneratorVeoGoogleAPI
   init_args:
-    api_key: 
+    api_key:
 
 working_dir: .working_dir/script2video
+
+# Limit the number of shots to process in Script2Video for validation/cost control.
+# Set to 1 to only process the first shot; omit or set to 0 to process all shots.
+max_shots: 1

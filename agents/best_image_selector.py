@@ -1,5 +1,5 @@
 import logging
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -61,17 +61,30 @@ class BestImageResponse(BaseModel):
 class BestImageSelector:
     def __init__(
         self,
-        base_url: str,
-        api_key: str,
-        chat_model: str,
+        chat_model=None,
+        *,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        model_provider: str = "openai",
     ):
-        
-        self.chat_model = init_chat_model(
-            model=chat_model,
-            model_provider="openai",
-            base_url=base_url,
-            api_key=api_key,
-        )
+        """
+        Initialize with either an existing LangChain chat_model instance or
+        provide model/base_url/api_key to create one.
+        """
+        if chat_model is not None:
+            self.chat_model = chat_model
+        else:
+            if not (model and base_url and api_key):
+                raise ValueError("Provide either chat_model or (model, base_url, api_key)")
+            self.chat_model = init_chat_model(
+                model=model,
+                model_provider=model_provider,
+                base_url=base_url,
+                api_key=api_key,
+            )
+        self.last_reason: Optional[str] = None
+        self.last_index: Optional[int] = None
 
 
     @retry(
@@ -142,6 +155,8 @@ class BestImageSelector:
             logging.warning(f"Received invalid best_image_index={idx}; defaulting to 0")
             idx = 0
         best_image_path = candidate_image_paths[idx]
+        self.last_index = idx
+        self.last_reason = response.reason
         logging.info(f"Best image selected: {best_image_path}")
         logging.info(f"Selection reason: {response.reason}")
         return best_image_path
