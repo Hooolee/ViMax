@@ -12,3 +12,5 @@ wheels/
 # working directory
 .working_dir/
 .test/
+
+venv/
