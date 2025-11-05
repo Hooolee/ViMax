@@ -1,21 +1,19 @@
 chat_model:
   init_args:
-    model: google/gemini-2.5-flash-lite-preview-09-2025
+    model: deepseek-chat
     model_provider: openai
-    api_key: 
-    base_url: https://openrouter.ai/api/v1
-
+    api_key: sk-028228020d844ff58d283cc882d6241b
+    base_url: https://api.deepseek.com/v1
 
 image_generator:
   class_path: tools.ImageGeneratorNanobananaGoogleAPI
   init_args:
-    api_key: 
-
+    api_key: sk-028228020d844ff58d283cc882d6241b
+    base_url: http://127.0.0.1:5345
 
 video_generator:
-  class_path: tools.VideoGeneratorVeoGoogleAPI
+  class_path: tools.VideoGeneratorDoubaoSeedanceOfficialAPI
   init_args:
-    api_key: 
-
+    api_key: ab2ffe0d-3449-4baa-b79d-6d4c9eb03432
 
 working_dir: .working_dir/idea2video

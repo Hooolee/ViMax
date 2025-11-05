@@ -12,12 +12,17 @@ from utils.retry import after_func
 
 class ImageGeneratorNanobananaGoogleAPI:
     def __init__(
-        self,
+        self, 
         api_key: str,
+        base_url: str
     ):
         self.model = "gemini-2.5-flash-image"
         self.client = genai.Client(
             api_key=api_key,
+            http_options=types.HttpOptions(
+                base_url=base_url,
+                api_version="v1beta",
+            ),
         )
 
     @retry(stop=stop_after_attempt(3), after=after_func)

@@ -211,7 +211,7 @@ class ReferenceImageSelector:
         chain = self.chat_model | parser
 
         try:
-            response = await chain.ainvoke(messages)        
+            response = await chain.ainvoke(messages)
             reference_image_path_and_text_pairs = [filtered_image_path_and_text_pairs[i] for i in response.ref_image_indices]
             return {
                 "reference_image_path_and_text_pairs": reference_image_path_and_text_pairs,
@@ -219,7 +219,26 @@ class ReferenceImageSelector:
             }
 
         except Exception as e:
-            logging.error(f"Error get image prompt: \n{e}")
-            raise e
+            # Fallback: degrade to text-only selection when the chat model does not support multimodal inputs
+            logging.error(f"Error get image prompt (multimodal). Falling back to text-only.\n{e}")
 
+            text_only_human_content = []
+            for idx, (_, text) in enumerate(filtered_image_path_and_text_pairs):
+                text_only_human_content.append({"type": "text", "text": f"Image {idx}: {text}"})
+            text_only_human_content.append({
+                "type": "text",
+                "text": human_prompt_template_select_reference_images.format(frame_description=frame_description)
+            })
+
+            text_only_messages = [
+                SystemMessage(content=system_prompt_template_select_reference_images_only_text.format(format_instructions=parser.get_format_instructions())),
+                HumanMessage(content=text_only_human_content),
+            ]
+
+            response = await (self.chat_model | parser).ainvoke(text_only_messages)
+            reference_image_path_and_text_pairs = [filtered_image_path_and_text_pairs[i] for i in response.ref_image_indices]
+            return {
+                "reference_image_path_and_text_pairs": reference_image_path_and_text_pairs,
+                "text_prompt": response.text_prompt,
+            }
 

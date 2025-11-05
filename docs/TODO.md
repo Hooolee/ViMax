@@ -1,0 +1,82 @@
+# ViMax 优先级 TODO（以“稳定提升成片质量（视觉层）”为目标的精简版）
+
+优先级定义：
+- P0 立即优先（最小闭环，直接提升画面稳定与连贯）
+- P1 应尽快（显著加分，提升专业度与效率）
+- P2 可规划（运维与创作体验增强）
+
+—
+
+## P0 必做（最小闭环｜直接影响画面稳定）
+
+- [ ] 分镜/镜头结构补齐“摄影参数 + 节拍/时长”
+  - 字段：`shot_size`、`angle`、`camera_height`、`lens_equiv_mm`、`screen_direction`、`transition_in/out`、`beat`、`duration_sec_estimate`
+  - 影响：`interfaces/shot_description.py`、`agents/storyboard_artist.py`
+  - 验收：分镜输出字段齐全并通过基本校验。
+
+- [ ] 连贯性与方向性校验（180/30 度）
+  - 影响：新增 `utils/continuity.py`；在 `pipelines/script2video_pipeline.py` 机位树之后触发
+  - 验收：违规镜头给出编号与修正建议；不通过不生成帧。
+
+- [ ] 参考图复合提示词的严格映射与校验
+  - 要求：`text_prompt` 必须显式“元素→Image N”映射；缺失/越界时报错并重试
+  - 影响：`agents/reference_image_selector.py`
+  - 验收：抽检通过；日志记录未引用关键元素的告警。
+
+- [ ] 帧/镜头多采样 + 一致性选优（关键镜头优先）
+  - 策略：对首帧/末帧和关键镜头 N>1 采样，用 `BestImageSelector` 选优
+  - 影响：`pipelines/script2video_pipeline.py`、`agents/best_image_selector.py`
+  - 验收：保留 `selection_reason.json`；失败回退记录原因。
+
+- [ ] 机位树增强与转场策略
+  - 要求：父子关系加入“轴线/视距/镜头尺寸”约束；必要时自动插入过渡镜头
+  - 影响：`agents/camera_image_generator.py`
+  - 验收：避免“广角→超长焦”直接跳变；必要处插入过渡。
+
+- [ ] 时间线/EDL 拼接替代简单拼接
+  - 输出：每镜头 `in/out`、过渡类型（切/溶/叠/音先/画先），按 EDL/JSON 合成
+  - 影响：新增 `utils/timeline.py`；改造 `pipelines/script2video_pipeline.py`
+  - 验收：`timeline.edl` 与 `final_video.mp4` 一致，过渡自然。
+
+—
+
+## P1 应尽快（质量与效率）
+
+- [ ] 将 ScriptPlanner 前置到 Idea2Video（计划稿 → 剧作）
+  - 作用：结构先行，减少后期“分镜补剧情”的被动
+  - 影响：`pipelines/idea2video_pipeline.py` 接入 `agents/script_planner.py`
+
+- [ ] 走位（Blocking）文本输出
+  - 输出：前/中/后景布局、起落点与路径、视线方向
+  - 影响：`agents/storyboard_artist.py`、`interfaces/shot_description.py` 新增 `blocking_text`
+
+- [ ] 服装/道具/光位/色板约束
+  - 场景级字段：`wardrobe_props`、`lighting_setup`、`palette`
+  - 影响：`interfaces/scene.py`、`agents/storyboard_artist.py`
+
+- [ ] 音频流水线解耦与结构化对白字段
+  - 四轨：对白/拟音/环境/音乐；恢复 `speaker/line/emotion/is_speaker_lip_visible`
+  - 影响：新增 `pipelines/audio_pipeline.py`、更新 `interfaces/shot_description.py`
+
+- [ ] 产物 manifest 与可复现 seed
+  - 影响：`tools/*`、`pipelines/*` 写入/读取 `manifest.json`
+
+- [ ] 统一重试/降级与日志分段
+  - 影响：`utils/retry.py`、外部 API 适配器、选择器链路
+
+—
+
+## P2 可规划（运维与体验）
+
+- [ ] 秘钥管理与 `.env.example`
+- [ ] 用户需求结构化解析（风格/镜头密度/景深倾向等）
+- [ ] 审片包导出（提案 PDF：梗概/角色圣经/分镜缩略/关键帧/色板/音乐参考）
+- [ ] 监控与可观测性（结构化日志 + 指标）
+
+—
+
+## 里程碑（建议）
+
+- M1（P0 全量）：完成“参数化 + 校验 + 选优 + 时间线”的稳定出片闭环
+- M2（P0+P1 主要项）：对话/走位/服化道/光色全面约束，结构化音频进入链路
+- M3（P2）：运维与体验完善，交付审片包与可观测体系

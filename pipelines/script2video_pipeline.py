@@ -7,7 +7,6 @@ import time
 from typing import Optional, Dict, List, Tuple, Literal
 from moviepy import VideoFileClip, concatenate_videoclips
 from PIL import Image
-from pipelines.base import BasePipeline
 from agents import *
 import yaml
 from interfaces import *

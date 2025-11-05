@@ -12,6 +12,7 @@ from .reranker_bge_silicon_api import RerankerBgeSiliconapi
 from .video_generator_doubao_seedance_yunwu_api import VideoGeneratorDoubaoSeedanceYunwuAPI
 from .video_generator_veo_google_api import VideoGeneratorVeoGoogleAPI
 from .video_generator_veo_yunwu_api import VideoGeneratorVeoYunwuAPI
+from .video_generator_doubao_seedance_official_api import VideoGeneratorDoubaoSeedanceOfficialAPI
 
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "VideoGeneratorDoubaoSeedanceYunwuAPI",
     "VideoGeneratorVeoGoogleAPI",
     "VideoGeneratorVeoYunwuAPI",
+    "VideoGeneratorDoubaoSeedanceOfficialAPI",
 ]
