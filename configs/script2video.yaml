@@ -15,7 +15,7 @@ video_generator:
   init_args:
     api_key:
 
-working_dir: .working_dir/script2video
+working_dir: .working_dir  # 基础路径，子目录会在脚本中指定
 
 # Limit the number of shots to process in Script2Video for validation/cost control.
 # Set to 1 to only process the first shot; omit or set to 0 to process all shots.

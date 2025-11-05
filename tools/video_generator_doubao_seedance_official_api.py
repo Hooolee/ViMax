@@ -31,8 +31,8 @@ class VideoGeneratorDoubaoSeedanceOfficialAPI:
         self,
         api_key: str,
         # Official model names (can be overridden via config)
-        pro_model: str = "doubao-seedance-pro-fast",
-        lite_i2v_model: str = "doubao-seedance-1-0-lite-i2v",
+        pro_model: str = "doubao-seedance-1-0-pro-fast-251015",
+        lite_i2v_model: str = "doubao-seedance-1-0-lite-i2v-250428",
         base_url: str = "https://ark.cn-beijing.volces.com/api/v3/contents/generations",
     ):
         self.api_key = api_key

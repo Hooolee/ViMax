@@ -23,10 +23,19 @@ Fast-paced with no more than 15 shots.
 """
 style = "Anime Style"
 
+# 指定输出子目录名称，最终路径会是 .working_dir/<output_subdir>
+# 修改这个变量可以生成多个不同的视频而不会覆盖
+output_subdir = "script2video"  # 可以改为 "video1", "video2", "basketball_scene" 等
 
 
 async def main():
-    pipeline = Script2VideoPipeline.init_from_config(config_path="configs/script2video.yaml")
+    if not output_subdir or output_subdir.strip() == "":
+        raise ValueError("必须指定 output_subdir！请在脚本中设置一个有效的子目录名称。")
+    
+    pipeline = Script2VideoPipeline.init_from_config(
+        config_path="configs/script2video.yaml",
+        output_subdir=output_subdir
+    )
     await pipeline(script=script, user_requirement=user_requirement, style=style)
 
 

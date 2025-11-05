@@ -35,6 +35,7 @@ class Idea2VideoPipeline:
     def init_from_config(
         cls,
         config_path: str,
+        output_subdir: str | None = None,
     ):
         from utils.config import resolve_env_vars
         with open(config_path, "r") as f:
@@ -57,14 +58,25 @@ class Idea2VideoPipeline:
         max_scenes = None
         if isinstance(config.get("max_scenes"), int) and config["max_scenes"] > 0:
             max_scenes = config["max_scenes"]
+            logging.info(f"⚙️  max_scenes set to {max_scenes}")
         elif config.get("validate_first_scene") is True:
             max_scenes = 1
+            logging.info(f"⚙️  validate_first_scene=True, max_scenes set to 1")
+        else:
+            logging.info(f"⚙️  max_scenes not set, will process all scenes")
+
+        # 拼接工作目录：基础路径 + 子目录
+        base_working_dir = config["working_dir"]
+        if output_subdir:
+            working_dir = os.path.join(base_working_dir, output_subdir)
+        else:
+            working_dir = base_working_dir
 
         return cls(
             chat_model=chat_model,
             image_generator=image_generator,
             video_generator=video_generator,
-            working_dir=config["working_dir"],
+            working_dir=working_dir,
             max_scenes=max_scenes,
         )
 
@@ -235,6 +247,9 @@ class Idea2VideoPipeline:
         limited_scene_scripts = scene_scripts
         if self.max_scenes is not None:
             limited_scene_scripts = scene_scripts[: self.max_scenes]
+            logging.info(f"⚠️  Limited scenes: processing {len(limited_scene_scripts)} out of {len(scene_scripts)} scenes (max_scenes={self.max_scenes})")
+        else:
+            logging.info(f"📝 Processing all {len(scene_scripts)} scenes (max_scenes not set)")
 
         for idx, scene_script in enumerate(limited_scene_scripts):
             scene_working_dir = os.path.join(self.working_dir, f"scene_{idx}")

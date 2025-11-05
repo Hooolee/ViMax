@@ -1,29 +1,56 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import re
 from typing import Any, List, Tuple, Union
 
 from google import genai
 from google.genai import types
 from langchain_core.runnables import RunnableLambda
+from langchain_core.messages import AIMessage
 
 
-def _flatten_messages(input_messages: Any) -> List[dict]:
+def _flatten_messages(input_messages: Any) -> Union[str, List[Union[str, types.Part]]]:
     """
-    Convert LangChain-style messages (list of tuples, BaseMessage objects, or
-    ChatPromptValue) into a list of content parts for google.genai.
-    Supports text and {'type':'image_url','image_url':{'url':...}} parts.
+    Convert LangChain-style messages into format acceptable by google.genai.
+    Returns either a string (text-only) or a list of Parts (mixed text/image).
     """
-    parts: List[dict] = []
+    parts: List[Union[str, types.Part]] = []
+    has_images = False
 
-    def add_text(t: str):
-        if t is None:
-            return
-        parts.append({"type": "text", "text": str(t)})
+    def process_content_item(item: Any):
+        nonlocal has_images
+        if isinstance(item, dict):
+            if item.get("type") == "text":
+                text = item.get("text", "")
+                if text:
+                    parts.append(text)
+            elif item.get("type") == "image_url":
+                has_images = True
+                image_url = item.get("image_url", {}).get("url", "")
+                if image_url:
+                    # Parse data URL: data:image/jpeg;base64,/9j/4AAQ...
+                    if image_url.startswith("data:"):
+                        match = re.match(r'data:([^;]+);base64,(.+)', image_url)
+                        if match:
+                            mime_type = match.group(1)
+                            b64_data = match.group(2)
+                            image_bytes = base64.b64decode(b64_data)
+                            parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+                    elif image_url.startswith("http"):
+                        # Remote image URL
+                        parts.append(types.Part.from_uri(uri=image_url))
+        elif isinstance(item, str):
+            if item:
+                parts.append(item)
+        else:
+            text = str(item)
+            if text:
+                parts.append(text)
 
     if isinstance(input_messages, str):
-        add_text(input_messages)
-        return parts
+        return input_messages
 
     # List of messages (tuples or objects)
     if isinstance(input_messages, (list, tuple)):
@@ -33,38 +60,36 @@ def _flatten_messages(input_messages: Any) -> List[dict]:
                 _, content = msg
                 if isinstance(content, list):
                     for item in content:
-                        if isinstance(item, dict) and item.get("type") == "image_url":
-                            parts.append({
-                                "type": "image_url",
-                                "image_url": {"url": item.get("image_url", {}).get("url")},
-                            })
-                        elif isinstance(item, dict) and item.get("type") == "text":
-                            add_text(item.get("text"))
-                        else:
-                            add_text(str(item))
+                        process_content_item(item)
+                elif isinstance(content, str):
+                    if content:
+                        parts.append(content)
                 else:
-                    add_text(content)
+                    text = str(content)
+                    if text:
+                        parts.append(text)
             else:
                 # try BaseMessage-like
                 content = getattr(msg, "content", None)
                 if isinstance(content, list):
                     for item in content:
-                        if isinstance(item, dict) and item.get("type") == "image_url":
-                            parts.append({
-                                "type": "image_url",
-                                "image_url": {"url": item.get("image_url", {}).get("url")},
-                            })
-                        elif isinstance(item, dict) and item.get("type") == "text":
-                            add_text(item.get("text"))
-                        else:
-                            add_text(str(item))
+                        process_content_item(item)
+                elif content is not None:
+                    text = str(content)
+                    if text:
+                        parts.append(text)
                 else:
-                    add_text(content if content is not None else str(msg))
-        return parts
+                    text = str(msg)
+                    if text:
+                        parts.append(text)
+        
+        # If no images, return as simple string for better compatibility
+        if not has_images and parts:
+            return "\n".join(str(p) for p in parts)
+        return parts if parts else ""
 
     # Fallback
-    add_text(str(input_messages))
-    return parts
+    return str(input_messages)
 
 
 def create_gemini_proxy_runnable(*, api_key: str, base_url: str, model: str, api_version: str = "v1beta"):
@@ -74,15 +99,15 @@ def create_gemini_proxy_runnable(*, api_key: str, base_url: str, model: str, api
     """
     client = genai.Client(
         api_key=api_key,
-        http_options=types.HttpOptions(base_url=base_url, api_version=api_version),
+        http_options=types.HttpOptions(baseUrl=base_url, apiVersion=api_version),
     )
 
-    async def _ainvoke(messages: Any) -> str:
-        parts = _flatten_messages(messages)
-        # google.genai expects a list of parts; pass through images & text
+    async def _ainvoke(messages: Any) -> AIMessage:
+        text_content = _flatten_messages(messages)
+        # google.genai expects a simple string or proper Content objects
         resp = await client.aio.models.generate_content(
             model=model,
-            contents=parts,
+            contents=text_content,
             config=types.GenerateContentConfig(response_modalities=["TEXT"]),
         )
         # Collect all text parts
@@ -94,10 +119,10 @@ def create_gemini_proxy_runnable(*, api_key: str, base_url: str, model: str, api
                         out.append(p.text)
         except Exception:
             pass
-        return "\n".join(out).strip()
+        return AIMessage(content="\n".join(out).strip())
 
-    def _invoke(messages: Any) -> str:
+    def _invoke(messages: Any) -> AIMessage:
         return asyncio.get_event_loop().run_until_complete(_ainvoke(messages))
 
-    return RunnableLambda(function=_invoke, afunction=_ainvoke)
+    return RunnableLambda(func=_invoke, afunc=_ainvoke)
 

@@ -54,6 +54,7 @@ class Script2VideoPipeline:
     def init_from_config(
         cls,
         config_path: str,
+        output_subdir: str | None = None,
     ):
         from utils.config import resolve_env_vars
         with open(config_path, "r") as f:
@@ -78,11 +79,18 @@ class Script2VideoPipeline:
         if isinstance(cfg_max_shots, int) and cfg_max_shots > 0:
             max_shots = cfg_max_shots
 
+        # 拼接工作目录：基础路径 + 子目录
+        base_working_dir = config["working_dir"]
+        if output_subdir:
+            working_dir = os.path.join(base_working_dir, output_subdir)
+        else:
+            working_dir = base_working_dir
+
         return cls(
             chat_model=chat_model,
             image_generator=image_generator,
             video_generator=video_generator,
-            working_dir=config["working_dir"],
+            working_dir=working_dir,
             max_shots=max_shots,
         )
 
@@ -94,6 +102,9 @@ class Script2VideoPipeline:
         characters: List[CharacterInScene] = None,
         character_portraits_registry: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None,
     ):
+        # 保存 style 供后续使用
+        self.style = style
+        
         if characters is None:
             characters = await self.extract_characters(script=script)
 
@@ -274,7 +285,8 @@ class Script2VideoPipeline:
                     print(f"🔍 Selecting reference images and generating prompt for first_frame of shot {first_shot_idx}...")
                     ff_selector_output = await self.reference_image_selector.select_reference_images_and_generate_prompt(
                         available_image_path_and_text_pairs=available_image_path_and_text_pairs,
-                        frame_description=shot_descriptions[first_shot_idx].ff_desc
+                        frame_description=shot_descriptions[first_shot_idx].ff_desc,
+                        style=self.style,  # 传入 style
                     )
                     with open(ff_selector_output_path, 'w', encoding='utf-8') as f:
                         json.dump(ff_selector_output, f, ensure_ascii=False, indent=4)
@@ -285,8 +297,23 @@ class Script2VideoPipeline:
                 prefix_prompt = ""
                 for i, (image_path, text) in enumerate(reference_image_path_and_text_pairs):
                     prefix_prompt += f"Image {i}: {text}\n"
-                prompt = f"{prefix_prompt}\n{prompt}"
+                
+                # Handle None or empty prompt
+                if prompt is None or not prompt.strip():
+                    logging.warning(f"text_prompt is None for shot {first_shot_idx} first_frame. Using frame description.")
+                    prompt = f"Generate an image based on the following description:\n{shot_descriptions[first_shot_idx].ff_desc}"
+                
+                prompt = f"{prefix_prompt}\n{prompt}" if prefix_prompt else prompt
                 reference_image_paths = [item[0] for item in reference_image_path_and_text_pairs]
+                
+                # Log the final prompt being sent to image generator
+                print(f"\n{'='*80}")
+                print(f"🎨 Generating first_frame for shot {first_shot_idx}")
+                print(f"📝 Final prompt to image generator:")
+                print(f"{prompt[:500]}{'...' if len(prompt) > 500 else ''}")
+                print(f"🖼️  Using {len(reference_image_paths)} reference images")
+                print(f"{'='*80}\n")
+                
                 ff_image: ImageOutput = await self.image_generator.generate_single_image(
                     prompt=prompt,
                     reference_image_paths=reference_image_paths,
@@ -408,7 +435,8 @@ class Script2VideoPipeline:
                 print(f"🔍 Selecting reference images and generating prompt for {frame_type} frame of shot {shot_idx}...")
                 selector_output = await self.reference_image_selector.select_reference_images_and_generate_prompt(
                     available_image_path_and_text_pairs=available_image_path_and_text_pairs,
-                    frame_description=frame_desc
+                    frame_description=frame_desc,
+                    style=self.style,  # 传入 style
                 )
                 with open(selector_output_path, 'w', encoding='utf-8') as f:
                     json.dump(selector_output, f, ensure_ascii=False, indent=4)
@@ -418,8 +446,22 @@ class Script2VideoPipeline:
             prefix_prompt = ""
             for i, (image_path, text) in enumerate(reference_image_path_and_text_pairs):
                 prefix_prompt += f"Image {i}: {text}\n"
-            prompt = f"{prefix_prompt}\n{prompt}"
+            
+            # Handle None or empty prompt
+            if prompt is None or not prompt.strip():
+                logging.warning(f"text_prompt is None for shot {shot_idx} {frame_type}. Using frame description.")
+                prompt = f"Generate an image based on the following description:\n{frame_desc}"
+            
+            prompt = f"{prefix_prompt}\n{prompt}" if prefix_prompt else prompt
             reference_image_paths = [item[0] for item in reference_image_path_and_text_pairs]
+
+            # Log the final prompt being sent to image generator
+            print(f"\n{'='*80}")
+            print(f"🎨 Generating {frame_type} for shot {shot_idx}")
+            print(f"📝 Final prompt to image generator:")
+            print(f"{prompt[:500]}{'...' if len(prompt) > 500 else ''}")
+            print(f"🖼️  Using {len(reference_image_paths)} reference images")
+            print(f"{'='*80}\n")
 
             # multi-sample and select best
             n_candidates = 3
