@@ -97,6 +97,9 @@ class BestImageSelector:
         target_description: str,
         candidate_image_paths: List[str],
     ) -> str:
+        logging.info("="*80)
+        logging.info("🏆 [Agent: BestImageSelector] Selecting best image from candidates...")
+        logging.info("="*80)
         """
         Args:
             ref_image_path_and_text_pairs:

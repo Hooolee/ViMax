@@ -262,6 +262,9 @@ Return ONLY the generated text prompt, no additional explanation.
         frame_description: str,
         style: str = None,  # 添加 style 参数
     ):
+        logging.info("="*80)
+        logging.info("🔍 [Agent: ReferenceImageSelector] Selecting reference images and generating prompt...")
+        logging.info("="*80)
         filtered_image_path_and_text_pairs = available_image_path_and_text_pairs
 
         # 1. filter images using text-only model

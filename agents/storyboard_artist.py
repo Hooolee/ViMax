@@ -1,5 +1,6 @@
 from typing import List, Optional, Literal
 import asyncio
+import logging
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt
 
@@ -184,6 +185,9 @@ class StoryboardArtist:
         user_requirement: Optional[str] = None,
         retry_timeout: int = 150,
     ) -> List[ShotBriefDescription]:
+        logging.info("="*80)
+        logging.info("🎨 [Agent: StoryboardArtist] Starting storyboard design...")
+        logging.info("="*80)
 
         class StoryboardResponse(BaseModel):
             storyboard: List[ShotBriefDescription] = Field(
@@ -218,6 +222,9 @@ class StoryboardArtist:
         characters: List[CharacterInScene],
         retry_timeout: int = 150,
     ) -> ShotDescription:
+        logging.info("="*80)
+        logging.info(f"📐 [Agent: StoryboardArtist] Decomposing visual description for shot {shot_brief_desc.idx}...")
+        logging.info("="*80)
         parser = PydanticOutputParser(pydantic_object=VisDescDecompositionResponse)
         prompt_template = ChatPromptTemplate.from_messages(
             [

@@ -46,6 +46,9 @@ class CharacterPortraitsGenerator:
         character: CharacterInScene,
         style: str,
     ) -> ImageOutput:
+        logging.info("="*80)
+        logging.info(f"🎨 [Agent: CharacterPortraitsGenerator] Generating front portrait for {character.identifier_in_scene}...")
+        logging.info("="*80)
         features = "(static) " + character.static_features + "; (dynamic) " + character.dynamic_features
         prompt = prompt_template_front.format(
             identifier=character.identifier_in_scene,

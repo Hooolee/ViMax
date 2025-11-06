@@ -120,6 +120,9 @@ class CameraImageGenerator:
         cameras: List[Camera],
         shot_descs: List[Union[ShotDescription, ShotBriefDescription]],
     ) -> List[Camera]:
+        logging.info("="*80)
+        logging.info("🎥 [Agent: CameraImageGenerator] Constructing camera tree...")
+        logging.info("="*80)
         parser = PydanticOutputParser(pydantic_object=CameraTreeResponse)
 
         camera_seq_str = "<CAMERA_SEQ>\n"

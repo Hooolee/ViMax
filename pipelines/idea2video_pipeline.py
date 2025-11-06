@@ -84,6 +84,9 @@ class Idea2VideoPipeline:
         self,
         story: str,
     ):
+        logging.info("="*80)
+        logging.info("👥 [Pipeline Stage] Extract Characters")
+        logging.info("="*80)
         save_path = os.path.join(self.working_dir, "characters.json")
 
         if os.path.exists(save_path):
@@ -106,6 +109,9 @@ class Idea2VideoPipeline:
         character_portraits_registry: Optional[Dict[str, Dict[str, Dict[str, str]]]],
         style: str,
     ):
+        logging.info("="*80)
+        logging.info("🎨 [Pipeline Stage] Generate Character Portraits")
+        logging.info("="*80)
         character_portraits_registry_path = os.path.join(self.working_dir, "character_portraits_registry.json")
         if character_portraits_registry is None:
             if os.path.exists(character_portraits_registry_path):
@@ -139,6 +145,9 @@ class Idea2VideoPipeline:
         idea: str,
         user_requirement: str,
     ):
+        logging.info("="*80)
+        logging.info("📖 [Pipeline Stage] Develop Story")
+        logging.info("="*80)
         save_path = os.path.join(self.working_dir, "story.txt")
         if os.path.exists(save_path):
             with open(save_path, "r", encoding="utf-8") as f:
@@ -159,6 +168,9 @@ class Idea2VideoPipeline:
         story: str,
         user_requirement: str,
     ):
+        logging.info("="*80)
+        logging.info("📝 [Pipeline Stage] Write Script Based on Story")
+        logging.info("="*80)
         save_path = os.path.join(self.working_dir, "script.json")
         if os.path.exists(save_path):
             with open(save_path, "r", encoding="utf-8") as f:

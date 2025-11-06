@@ -127,6 +127,9 @@ class Screenwriter:
         idea: str,
         user_requirement: Optional[str] = None,
     ) -> str:
+        logging.info("="*80)
+        logging.info("🎬 [Agent: Screenwriter] Starting story development...")
+        logging.info("="*80)
         messages = [
             ("system", system_prompt_template_develop_story),
             ("human", human_prompt_template_develop_story.format(idea=idea, user_requirement=user_requirement)),
@@ -142,6 +145,9 @@ class Screenwriter:
         user_requirement: Optional[str] = None,
     ) -> List[str]:
 
+        logging.info("="*80)
+        logging.info("📝 [Agent: Screenwriter] Starting script writing based on story...")
+        logging.info("="*80)
 
         class WriteScriptBasedOnStoryResponse(BaseModel):
             script: List[str] = Field(

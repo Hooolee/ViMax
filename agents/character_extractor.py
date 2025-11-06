@@ -73,6 +73,9 @@ class CharacterExtractor:
         after=after_func,
     )
     async def extract_characters(self, script: str) -> List[CharacterInScene]:
+        logging.info("="*80)
+        logging.info("👥 [Agent: CharacterExtractor] Starting character extraction...")
+        logging.info("="*80)
 
         parser = PydanticOutputParser(pydantic_object=ExtractCharactersResponse)
         

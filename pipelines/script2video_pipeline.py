@@ -219,6 +219,9 @@ class Script2VideoPipeline:
         character_portraits_registry: Dict[str, Dict[str, Dict[str, str]]],
         priority_shot_idxs: List[int],
     ):
+        logging.info("="*80)
+        logging.info(f"🖼️ [Pipeline Stage] Generate Frames for Camera {camera.idx}")
+        logging.info("="*80)
         # 1. generate the first_frame of the first shot of the camera
         first_shot_idx = camera.active_shot_idxs[0]
         first_shot_ff_path = os.path.join(self.working_dir, "shots", f"{first_shot_idx}", "first_frame.png")
@@ -379,6 +382,9 @@ class Script2VideoPipeline:
         self,
         shot_description: ShotDescription,
     ):
+        logging.info("="*80)
+        logging.info(f"🎥 [Pipeline Stage] Generate Video for Shot {shot_description.idx}")
+        logging.info("="*80)
         video_path = os.path.join(self.working_dir, "shots", f"{shot_description.idx}", "video.mp4")
         if os.path.exists(video_path):
             print(f"🚀 Skipped generating video for shot {shot_description.idx}, already exists.")
@@ -514,6 +520,9 @@ class Script2VideoPipeline:
         self,
         shot_descriptions: List[ShotDescription],
     ):
+        logging.info("="*80)
+        logging.info("🎥 [Pipeline Stage] Construct Camera Tree")
+        logging.info("="*80)
         camera_tree_path = os.path.join(self.working_dir, "camera_tree.json")
 
         if os.path.exists(camera_tree_path):
@@ -653,6 +662,9 @@ class Script2VideoPipeline:
         characters: List[CharacterInScene],
         user_requirement: str,
     ):
+        logging.info("="*80)
+        logging.info("📋 [Pipeline Stage] Design Storyboard")
+        logging.info("="*80)
         storyboard_path = os.path.join(self.working_dir, "storyboard.json")
         if os.path.exists(storyboard_path):
             with open(storyboard_path, 'r', encoding='utf-8') as f:
@@ -687,6 +699,9 @@ class Script2VideoPipeline:
         shot_brief_descriptions: List[ShotBriefDescription],
         characters: List[CharacterInScene],
     ):
+        logging.info("="*80)
+        logging.info("🎬 [Pipeline Stage] Decompose Visual Descriptions")
+        logging.info("="*80)
         tasks = [
             self.decompose_visual_description_for_single_shot_brief_description(shot_brief_description, characters)
             for shot_brief_description in shot_brief_descriptions
