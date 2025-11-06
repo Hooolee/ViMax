@@ -37,6 +37,7 @@ class Script2VideoPipeline:
         self.image_generator = image_generator
         self.video_generator = video_generator
 
+        self.scene_planner = ScenePlanner(chat_model=self.chat_model)
         self.character_extractor = CharacterExtractor(chat_model=self.chat_model)
         self.character_portraits_generator = CharacterPortraitsGenerator(image_generator=self.image_generator)
         self.storyboard_artist = StoryboardArtist(chat_model=self.chat_model)
@@ -101,12 +102,43 @@ class Script2VideoPipeline:
         style: str,
         characters: List[CharacterInScene] = None,
         character_portraits_registry: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None,
+        scenes: Optional[List[SceneDefinition]] = None,
     ):
         # 保存 style 供后续使用
         self.style = style
         
+        # Step 1: Plan scenes (统一场景划分)
+        if scenes is not None:
+            # 使用传入的场景定义（来自 Idea2Video）
+            print(f"🚀 Using {len(scenes)} scene(s) provided by upstream pipeline.")
+            # 保存到文件以便后续缓存
+            scenes_path = os.path.join(self.working_dir, "scenes.json")
+            if not os.path.exists(scenes_path):
+                with open(scenes_path, "w", encoding="utf-8") as f:
+                    json.dump([s.model_dump() for s in scenes], f, ensure_ascii=False, indent=4)
+                print(f"☑️ Saved {len(scenes)} scene(s) to {scenes_path}.")
+        else:
+            # 没有传入场景定义，按原有逻辑处理
+            scenes_path = os.path.join(self.working_dir, "scenes.json")
+            if os.path.exists(scenes_path):
+                with open(scenes_path, "r", encoding="utf-8") as f:
+                    from interfaces.scene import SceneDefinition
+                    scenes = [SceneDefinition.model_validate(s) for s in json.load(f)]
+                print(f"🚀 Loaded {len(scenes)} scene(s) from existing file.")
+            else:
+                print(f"🎬 Planning scene segmentation...")
+                scenes = await self.plan_scenes(script=script)
+                with open(scenes_path, "w", encoding="utf-8") as f:
+                    json.dump([s.model_dump() for s in scenes], f, ensure_ascii=False, indent=4)
+                print(f"☑️ Planned {len(scenes)} scene(s) and saved to {scenes_path}.")
+        
+        # 保存 scenes 供后续使用（用于场景一致性）
+        self.scenes = scenes
+        self.scenes_dict = {scene.scene_id: scene for scene in scenes}
+        
+        # Step 2: Extract characters (使用统一的场景定义)
         if characters is None:
-            characters = await self.extract_characters(script=script)
+            characters = await self.extract_characters(script=script, scenes=scenes)
 
             # characters_path = os.path.join(self.working_dir, "characters.json")
             # if os.path.exists(characters_path):
@@ -115,11 +147,12 @@ class Script2VideoPipeline:
             #     print(f"🚀 Loaded {len(characters)} characters from existing file.")
             # else:
             #     print(f"🔍 Extracting characters from script...")
-            #     characters = await self.extract_characters(script=script)
+            #     characters = await self.extract_characters(script=script, scenes=scenes)
             #     with open(characters_path, "w", encoding="utf-8") as f:
             #         json.dump([c.model_dump() for c in characters], f, ensure_ascii=False, indent=4)
             #     print(f"☑️ Extracted {len(characters)} characters from script and saved to {characters_path}.")
 
+        # Step 3: Generate character portraits
         if character_portraits_registry is None:
             character_portraits_registry_path = os.path.join(self.working_dir, "character_portraits_registry.json")
             if os.path.exists(character_portraits_registry_path):
@@ -140,10 +173,11 @@ class Script2VideoPipeline:
 
 
 
-        # design shots
+        # Step 4: Design storyboard (使用统一的场景定义)
         storyboard = await self.design_storyboard(
             script=script,
             characters=characters,
+            scenes=scenes,
             user_requirement=user_requirement,
         )
 
@@ -224,7 +258,12 @@ class Script2VideoPipeline:
         logging.info("="*80)
         # 1. generate the first_frame of the first shot of the camera
         first_shot_idx = camera.active_shot_idxs[0]
-        first_shot_ff_path = os.path.join(self.working_dir, "shots", f"{first_shot_idx}", "first_frame.png")
+        
+        # 确保镜头目录存在
+        first_shot_dir = os.path.join(self.working_dir, "shots", f"{first_shot_idx}")
+        os.makedirs(first_shot_dir, exist_ok=True)
+        
+        first_shot_ff_path = os.path.join(first_shot_dir, "first_frame.png")
 
         if os.path.exists(first_shot_ff_path):
             print(f"🚀 Skipped generating first_frame for shot {first_shot_idx}, already exists.")
@@ -237,8 +276,17 @@ class Script2VideoPipeline:
             for character_idx in shot_descriptions[first_shot_idx].ff_vis_char_idxs:
                 identifier_in_scene = characters[character_idx].identifier_in_scene
                 registry_item = character_portraits_registry[identifier_in_scene]
-                for view, item in registry_item.items():
-                    available_image_path_and_text_pairs.append((item["path"], item["description"]))
+                
+                # 处理新的嵌套结构（包含 appearance_id）
+                # registry_item 现在的结构是: {appearance_id: {view: {path, description}}}
+                for appearance_or_view, content in registry_item.items():
+                    if isinstance(content, dict) and "path" in content:
+                        # 旧格式：直接是 {view: {path, description}}
+                        available_image_path_and_text_pairs.append((content["path"], content["description"]))
+                    else:
+                        # 新格式：{appearance_id: {view: {path, description}}}
+                        for view, item in content.items():
+                            available_image_path_and_text_pairs.append((item["path"], item["description"]))
             
             # generate the first_frame based on the shot_description.ff_desc
             if camera.parent_shot_idx is not None:
@@ -290,6 +338,8 @@ class Script2VideoPipeline:
                         available_image_path_and_text_pairs=available_image_path_and_text_pairs,
                         frame_description=shot_descriptions[first_shot_idx].ff_desc,
                         style=self.style,  # 传入 style
+                        scene_id=shot_descriptions[first_shot_idx].scene_id,  # 传入场景 ID 用于外观过滤
+                        characters=characters,  # 传入角色列表用于外观过滤
                     )
                     with open(ff_selector_output_path, 'w', encoding='utf-8') as f:
                         json.dump(ff_selector_output, f, ensure_ascii=False, indent=4)
@@ -332,9 +382,12 @@ class Script2VideoPipeline:
 
 
         # 2. generate the following frames of the camera
+        # P2 优化：改进同一 Camera 内的帧生成顺序，确保时序一致性
+        # 策略：按镜头顺序生成，每个镜头的末帧生成后再生成下一个镜头的首帧
         priority_tasks = []
         normal_tasks = []
-
+        
+        # 第一个镜头的末帧优先生成（如果需要）
         if shot_descriptions[first_shot_idx].variation_type in ["medium", "large"]:
             task = self.generate_frame_for_single_shot(
                 shot_idx=first_shot_idx, 
@@ -343,10 +396,16 @@ class Script2VideoPipeline:
                 frame_desc=shot_descriptions[first_shot_idx].lf_desc,
                 visible_characters=[characters[idx] for idx in shot_descriptions[first_shot_idx].lf_vis_char_idxs],
                 character_portraits_registry=character_portraits_registry,
+                scene_id=shot_descriptions[first_shot_idx].scene_id,
+                shot_descriptions=shot_descriptions,
             )
-            normal_tasks.append(task)
+            # 立即await第一个镜头的末帧，确保后续镜头能看到它
+            await task
+            print(f"✨ P2优化: 第一个镜头 {first_shot_idx} 的末帧已完成，后续镜头现在可以引用它")
 
+        # 按镜头顺序处理其他镜头
         for shot_idx in camera.active_shot_idxs[1:]:
+            # 生成当前镜头的首帧
             first_frame_task = self.generate_frame_for_single_shot(
                     shot_idx=shot_idx, 
                     frame_type="first_frame", 
@@ -354,13 +413,18 @@ class Script2VideoPipeline:
                     frame_desc=shot_descriptions[shot_idx].ff_desc,
                     visible_characters=[characters[idx] for idx in shot_descriptions[shot_idx].ff_vis_char_idxs],
                     character_portraits_registry=character_portraits_registry,
+                    scene_id=shot_descriptions[shot_idx].scene_id,
+                    shot_descriptions=shot_descriptions,
                 )
+            
+            # 如果是优先级镜头，立即等待完成（保持原有的优先级逻辑）
             if shot_idx in priority_shot_idxs:
-                priority_tasks.append(first_frame_task)
+                await first_frame_task
+                print(f"✨ P2优化: 优先级镜头 {shot_idx} 的首帧已完成")
             else:
                 normal_tasks.append(first_frame_task)
 
-
+            # 如果需要末帧，生成末帧
             if shot_descriptions[shot_idx].variation_type in ["medium", "large"]:
                 last_frame_task = self.generate_frame_for_single_shot(
                     shot_idx=shot_idx, 
@@ -369,12 +433,15 @@ class Script2VideoPipeline:
                     frame_desc=shot_descriptions[shot_idx].lf_desc,
                     visible_characters=[characters[idx] for idx in shot_descriptions[shot_idx].lf_vis_char_idxs],
                     character_portraits_registry=character_portraits_registry,
+                    scene_id=shot_descriptions[shot_idx].scene_id,
+                    shot_descriptions=shot_descriptions,
                 )
                 normal_tasks.append(last_frame_task)
 
-
-        await asyncio.gather(*priority_tasks)
-        await asyncio.gather(*normal_tasks)
+        # 等待所有非优先级任务完成
+        # 注意：这里仍然并发执行，但由于 P1 优化，每个任务都能看到已完成的帧
+        if normal_tasks:
+            await asyncio.gather(*normal_tasks)
 
 
 
@@ -389,22 +456,60 @@ class Script2VideoPipeline:
         if os.path.exists(video_path):
             print(f"🚀 Skipped generating video for shot {shot_description.idx}, already exists.")
         else:
-            await self.frame_events[shot_description.idx]["first_frame"].wait()
-            if shot_description.variation_type in ["medium", "large"]:
-                await self.frame_events[shot_description.idx]["last_frame"].wait()
+            # P4 优化：增强错误处理和超时机制
+            try:
+                # 等待首帧完成，添加超时保护
+                timeout_seconds = 600  # 10分钟超时
+                try:
+                    await asyncio.wait_for(
+                        self.frame_events[shot_description.idx]["first_frame"].wait(),
+                        timeout=timeout_seconds
+                    )
+                    logging.info(f"✅ P4优化: 镜头 {shot_description.idx} 的首帧已就绪")
+                except asyncio.TimeoutError:
+                    logging.error(f"❌ P4错误: 镜头 {shot_description.idx} 首帧生成超时（{timeout_seconds}秒）")
+                    raise RuntimeError(f"Frame generation timeout for shot {shot_description.idx} first_frame")
+                
+                # 如果需要末帧，也等待末帧完成
+                if shot_description.variation_type in ["medium", "large"]:
+                    try:
+                        await asyncio.wait_for(
+                            self.frame_events[shot_description.idx]["last_frame"].wait(),
+                            timeout=timeout_seconds
+                        )
+                        logging.info(f"✅ P4优化: 镜头 {shot_description.idx} 的末帧已就绪")
+                    except asyncio.TimeoutError:
+                        logging.error(f"❌ P4错误: 镜头 {shot_description.idx} 末帧生成超时（{timeout_seconds}秒）")
+                        raise RuntimeError(f"Frame generation timeout for shot {shot_description.idx} last_frame")
 
-            frame_paths = []
-            frame_paths.append(os.path.join(self.working_dir, "shots", f"{shot_description.idx}", "first_frame.png"))
-            if shot_description.variation_type in ["medium", "large"]:
-                frame_paths.append(os.path.join(self.working_dir, "shots", f"{shot_description.idx}", "last_frame.png"))
+                # 验证帧文件是否真的存在
+                frame_paths = []
+                first_frame_path = os.path.join(self.working_dir, "shots", f"{shot_description.idx}", "first_frame.png")
+                if not os.path.exists(first_frame_path):
+                    logging.error(f"❌ P4错误: 镜头 {shot_description.idx} 首帧文件不存在: {first_frame_path}")
+                    raise FileNotFoundError(f"First frame file not found: {first_frame_path}")
+                frame_paths.append(first_frame_path)
+                
+                if shot_description.variation_type in ["medium", "large"]:
+                    last_frame_path = os.path.join(self.working_dir, "shots", f"{shot_description.idx}", "last_frame.png")
+                    if not os.path.exists(last_frame_path):
+                        logging.error(f"❌ P4错误: 镜头 {shot_description.idx} 末帧文件不存在: {last_frame_path}")
+                        raise FileNotFoundError(f"Last frame file not found: {last_frame_path}")
+                    frame_paths.append(last_frame_path)
 
-            print(f"🎬 Starting video generation for shot {shot_description.idx}...")
-            video_output = await self.video_generator.generate_single_video(
-                prompt=shot_description.motion_desc + "\n" + shot_description.audio_desc,
-                reference_image_paths=frame_paths,
-            )
-            video_output.save(video_path)
-            print(f"☑️ Generated video for shot {shot_description.idx}, saved to {video_path}.")
+                logging.info(f"✅ P4优化: 所有帧文件已验证存在，开始生成视频")
+                print(f"🎬 Starting video generation for shot {shot_description.idx}...")
+                video_output = await self.video_generator.generate_single_video(
+                    prompt=shot_description.motion_desc + "\n" + shot_description.audio_desc,
+                    reference_image_paths=frame_paths,
+                )
+                video_output.save(video_path)
+                print(f"☑️ Generated video for shot {shot_description.idx}, saved to {video_path}.")
+                
+            except Exception as e:
+                logging.error(f"❌ P4错误: 镜头 {shot_description.idx} 视频生成失败: {str(e)}")
+                # 触发事件以避免死锁，但抛出异常让上层处理
+                raise
 
     async def generate_frame_for_single_shot(
         self,
@@ -414,9 +519,15 @@ class Script2VideoPipeline:
         frame_desc: str,
         visible_characters: List[CharacterInScene],
         character_portraits_registry: Dict[str, Dict[str, Dict[str, str]]],
+        scene_id: Optional[int] = None,  # 场景 ID
+        shot_descriptions: Optional[List[ShotDescription]] = None,  # 用于收集已完成的帧
     ) -> ImageOutput:
 
-        frame_image_path = os.path.join(self.working_dir, "shots", f"{shot_idx}", f"{frame_type}.png")
+        # 确保镜头目录存在
+        shot_dir = os.path.join(self.working_dir, "shots", f"{shot_idx}")
+        os.makedirs(shot_dir, exist_ok=True)
+        
+        frame_image_path = os.path.join(shot_dir, f"{frame_type}.png")
 
         if os.path.exists(frame_image_path):
             print(f"🚀 Skipped generating {frame_type} for shot {shot_idx}, already exists.")
@@ -427,10 +538,107 @@ class Script2VideoPipeline:
             for visible_character in visible_characters:
                 identifier_in_scene = visible_character.identifier_in_scene
                 registry_item = character_portraits_registry[identifier_in_scene]
-                for view, item in registry_item.items():
-                    available_image_path_and_text_pairs.append((item["path"], item["description"]))
+                
+                # 处理新的嵌套结构（包含 appearance_id）
+                for appearance_or_view, content in registry_item.items():
+                    if isinstance(content, dict) and "path" in content:
+                        # 旧格式：直接是 {view: {path, description}}
+                        available_image_path_and_text_pairs.append((content["path"], content["description"]))
+                    else:
+                        # 新格式：{appearance_id: {view: {path, description}}}
+                        for view, item in content.items():
+                            available_image_path_and_text_pairs.append((item["path"], item["description"]))
 
+            # P1 优化：收集所有已完成的帧作为环境参考
+            # 这解决了并发生成时每个镜头只能看到第一个镜头首帧的问题
+            completed_frames = []
+            
+            # 遍历所有镜头，收集已完成的帧
+            if shot_descriptions is not None:
+                for other_shot_idx in range(len(shot_descriptions)):
+                    # 不添加当前正在生成的帧本身
+                    if other_shot_idx == shot_idx and frame_type == "first_frame":
+                        continue
+                    if other_shot_idx == shot_idx and frame_type == "last_frame":
+                        # 对于末帧生成，可以使用自己的首帧
+                        ff_event = self.frame_events.get(other_shot_idx, {}).get("first_frame")
+                        if ff_event and ff_event.is_set():
+                            ff_path = os.path.join(self.working_dir, "shots", f"{other_shot_idx}", "first_frame.png")
+                            if os.path.exists(ff_path):
+                                # 添加镜头信息用于后续排序
+                                completed_frames.append({
+                                    "shot_idx": other_shot_idx,
+                                    "frame_type": "first_frame",
+                                    "path": ff_path,
+                                    "scene_id": shot_descriptions[other_shot_idx].scene_id if other_shot_idx < len(shot_descriptions) else None,
+                                })
+                        continue
+                    
+                    # 检查首帧是否完成
+                    ff_event = self.frame_events.get(other_shot_idx, {}).get("first_frame")
+                    if ff_event and ff_event.is_set():
+                        ff_path = os.path.join(self.working_dir, "shots", f"{other_shot_idx}", "first_frame.png")
+                        if os.path.exists(ff_path):
+                            completed_frames.append({
+                                "shot_idx": other_shot_idx,
+                                "frame_type": "first_frame",
+                                "path": ff_path,
+                                "scene_id": shot_descriptions[other_shot_idx].scene_id if other_shot_idx < len(shot_descriptions) else None,
+                            })
+                    
+                    # 检查末帧是否完成
+                    lf_event = self.frame_events.get(other_shot_idx, {}).get("last_frame")
+                    if lf_event and lf_event.is_set():
+                        lf_path = os.path.join(self.working_dir, "shots", f"{other_shot_idx}", "last_frame.png")
+                        if os.path.exists(lf_path):
+                            completed_frames.append({
+                                "shot_idx": other_shot_idx,
+                                "frame_type": "last_frame",
+                                "path": lf_path,
+                                "scene_id": shot_descriptions[other_shot_idx].scene_id if other_shot_idx < len(shot_descriptions) else None,
+                            })
+            
+            # 排序：优先添加同场景的帧，然后按时间顺序（镜头索引）
+            current_scene_id = shot_descriptions[shot_idx].scene_id if shot_descriptions and shot_idx < len(shot_descriptions) else None
+            completed_frames.sort(key=lambda x: (
+                0 if x["scene_id"] == current_scene_id else 1,  # 同场景优先
+                -x["shot_idx"],  # 时间上更近的帧优先（倒序，较大的索引先）
+            ))
+            
+            # 添加已完成的帧到参考列表，限制数量避免过多
+            max_environment_refs = 5  # 最多添加5个环境参考帧
+            added_env_refs = 0
+            for frame_info in completed_frames:
+                if added_env_refs >= max_environment_refs:
+                    break
+                
+                # 生成描述文本
+                desc_text = f"Environment reference from shot {frame_info['shot_idx']} {frame_info['frame_type']}"
+                if frame_info["scene_id"] == current_scene_id:
+                    desc_text += " (same scene - high priority for environment consistency)"
+                
+                available_image_path_and_text_pairs.append((frame_info["path"], desc_text))
+                added_env_refs += 1
+            
+            if added_env_refs > 0:
+                print(f"✨ P1优化: 添加了 {added_env_refs} 个已完成的帧作为环境参考")
+
+            # 仍然保留第一个镜头的首帧引用（向后兼容）
             available_image_path_and_text_pairs.append(first_shot_ff_path_and_text_pair)
+
+            # P3 优化：增强场景定义传递的防御性检查
+            scene_definition = None
+            if scene_id is not None:
+                if not hasattr(self, 'scenes_dict'):
+                    logging.warning(f"⚠️ P3警告: scenes_dict 未初始化，镜头 {shot_idx} 将缺少场景上下文信息")
+                else:
+                    scene_definition = self.scenes_dict.get(scene_id)
+                    if scene_definition is None:
+                        logging.warning(f"⚠️ P3警告: 场景ID {scene_id} 在 scenes_dict 中不存在，镜头 {shot_idx} 将缺少场景上下文信息")
+                    else:
+                        logging.info(f"✅ P3优化: 成功获取场景 {scene_id} 的定义用于镜头 {shot_idx}")
+            else:
+                logging.warning(f"⚠️ P3警告: 镜头 {shot_idx} 没有关联的场景ID")
 
             selector_output_path = os.path.join(self.working_dir, "shots", f"{shot_idx}", f"{frame_type}_selector_output.json")
             if os.path.exists(selector_output_path):
@@ -443,6 +651,9 @@ class Script2VideoPipeline:
                     available_image_path_and_text_pairs=available_image_path_and_text_pairs,
                     frame_description=frame_desc,
                     style=self.style,  # 传入 style
+                    scene_id=scene_id,  # 传入场景 ID 用于外观过滤
+                    characters=visible_characters,  # 传入可见角色列表
+                    scene_definition=scene_definition,  # 传入场景定义用于场景一致性
                 )
                 with open(selector_output_path, 'w', encoding='utf-8') as f:
                     json.dump(selector_output, f, ensure_ascii=False, indent=4)
@@ -548,10 +759,39 @@ class Script2VideoPipeline:
 
 
 
-    async def extract_characters(
+    async def plan_scenes(
         self,
         script: str,
     ):
+        """
+        规划场景划分
+        
+        Plan scene segmentation from the script.
+        """
+        from interfaces.scene import SceneDefinition
+        
+        logging.info("="*80)
+        logging.info(f"🎬 [Pipeline Stage] Planning Scene Segmentation")
+        logging.info("="*80)
+        
+        scenes = await self.scene_planner.plan_scenes(script)
+        
+        return scenes
+
+
+    async def extract_characters(
+        self,
+        script: str,
+        scenes: List = None,
+    ):
+        """
+        提取人物信息
+        
+        Extract character information from the script.
+        If scenes are provided, characters will use these scene IDs.
+        """
+        from interfaces.scene import SceneDefinition
+        
         save_path = os.path.join(self.working_dir, "characters.json")
 
         if os.path.exists(save_path):
@@ -560,7 +800,7 @@ class Script2VideoPipeline:
             characters = [CharacterInScene.model_validate(character) for character in characters]
             print(f"🚀 Loaded {len(characters)} characters from existing file.")
         else:
-            characters = await self.character_extractor.extract_characters(script)
+            characters = await self.character_extractor.extract_characters(script, scenes=scenes)
             with open(save_path, "w", encoding="utf-8") as f:
                 json.dump([character.model_dump() for character in characters], f, ensure_ascii=False, indent=4)
             print(f"✅ Extracted {len(characters)} characters from script and saved to {save_path}.")
@@ -608,51 +848,84 @@ class Script2VideoPipeline:
         character: CharacterInScene,
         style: str,
     ):
-        character_dir = os.path.join(self.working_dir, "character_portraits", f"{character.idx}_{character.identifier_in_scene}")
-        os.makedirs(character_dir, exist_ok=True)
+        """为单个角色生成所有外观的肖像
+        
+        该方法会为角色的每个外观生成独立的三视图肖像，并保存到对应的目录中。
+        """
+        character_base_dir = os.path.join(
+            self.working_dir, 
+            "character_portraits", 
+            f"{character.idx}_{character.identifier_in_scene}"
+        )
+        os.makedirs(character_base_dir, exist_ok=True)
 
-        front_portrait_path = os.path.join(character_dir, "front.png")
-        if os.path.exists(front_portrait_path):
-            pass
-        else:
-            front_portrait_output = await self.character_portraits_generator.generate_front_portrait(character, style)
-            front_portrait_output.save(front_portrait_path)
+        result = {character.identifier_in_scene: {}}
 
+        # 为每个外观生成肖像
+        for appearance in character.appearances:
+            appearance_dir = os.path.join(character_base_dir, appearance.appearance_id)
+            os.makedirs(appearance_dir, exist_ok=True)
 
-        side_portrait_path = os.path.join(character_dir, "side.png")
-        if os.path.exists(side_portrait_path):
-            pass
-        else:
-            side_portrait_output = await self.character_portraits_generator.generate_side_portrait(character, front_portrait_path)
-            side_portrait_output.save(side_portrait_path)
+            front_portrait_path = os.path.join(appearance_dir, "front.png")
+            side_portrait_path = os.path.join(appearance_dir, "side.png")
+            back_portrait_path = os.path.join(appearance_dir, "back.png")
 
-        back_portrait_path = os.path.join(character_dir, "back.png")
-        if os.path.exists(back_portrait_path):
-            pass
-        else:
-            back_portrait_output = await self.character_portraits_generator.generate_back_portrait(character, front_portrait_path)
-            back_portrait_output.save(back_portrait_path)
+            # 检查是否已存在
+            if all(os.path.exists(p) for p in [front_portrait_path, side_portrait_path, back_portrait_path]):
+                print(f"🚀 Skipped generating portraits for {character.identifier_in_scene} - {appearance.appearance_id}, already exists.")
+            else:
+                print(f"🎨 Generating portraits for {character.identifier_in_scene} - {appearance.appearance_id}...")
+                
+                # 生成正面肖像
+                if not os.path.exists(front_portrait_path):
+                    front_portrait_output = await self.character_portraits_generator.generate_front_portrait(
+                        character, style, appearance
+                    )
+                    front_portrait_output.save(front_portrait_path)
 
-        self.character_portrait_events[character.idx].set()
+                # 生成侧面肖像
+                if not os.path.exists(side_portrait_path):
+                    side_portrait_output = await self.character_portraits_generator.generate_side_portrait(
+                        character, front_portrait_path, appearance
+                    )
+                    side_portrait_output.save(side_portrait_path)
 
-        print(f"☑️ Completed character portrait generation for {character.identifier_in_scene}.")
+                # 生成背面肖像
+                if not os.path.exists(back_portrait_path):
+                    back_portrait_output = await self.character_portraits_generator.generate_back_portrait(
+                        character, front_portrait_path
+                    )
+                    back_portrait_output.save(back_portrait_path)
 
-        return {
-            character.identifier_in_scene: {
+                print(f"☑️ Completed portraits for {character.identifier_in_scene} - {appearance.appearance_id}")
+
+            # 添加到结果中
+            # 注意：这里的 key 格式变更为包含 appearance_id
+            appearance_key = appearance.appearance_id
+            if appearance_key not in result[character.identifier_in_scene]:
+                result[character.identifier_in_scene][appearance_key] = {}
+            
+            scenes_str = f"scenes {appearance.scene_ids}" if appearance.scene_ids else "all scenes"
+            result[character.identifier_in_scene][appearance_key] = {
                 "front": {
                     "path": front_portrait_path,
-                    "description": f"A front view portrait of {character.identifier_in_scene}.",
+                    "description": f"A front view portrait of {character.identifier_in_scene} ({appearance.description}, {scenes_str}).",
                 },
                 "side": {
                     "path": side_portrait_path,
-                    "description": f"A side view portrait of {character.identifier_in_scene}.",
+                    "description": f"A side view portrait of {character.identifier_in_scene} ({appearance.description}, {scenes_str}).",
                 },
                 "back": {
                     "path": back_portrait_path,
-                    "description": f"A back view portrait of {character.identifier_in_scene}.",
+                    "description": f"A back view portrait of {character.identifier_in_scene} ({appearance.description}, {scenes_str}).",
                 },
             }
-        }
+
+        self.character_portrait_events[character.idx].set()
+        print(f"✅ Completed all appearance portraits for {character.identifier_in_scene} ({len(character.appearances)} appearance(s)).")
+
+        return result
+
 
 
 
@@ -660,8 +933,17 @@ class Script2VideoPipeline:
         self,
         script: str,
         characters: List[CharacterInScene],
-        user_requirement: str,
+        scenes: List = None,
+        user_requirement: str = None,
     ):
+        """
+        设计分镜
+        
+        Design storyboard based on the script.
+        If scenes are provided, shots will be assigned to these scene IDs.
+        """
+        from interfaces.scene import SceneDefinition
+        
         logging.info("="*80)
         logging.info("📋 [Pipeline Stage] Design Storyboard")
         logging.info("="*80)
@@ -676,12 +958,14 @@ class Script2VideoPipeline:
             storyboard = await self.storyboard_artist.design_storyboard(
                 script=script,
                 characters=characters,
+                scenes=scenes,
                 user_requirement=user_requirement,
                 retry_timeout=150,
             )
             with open(storyboard_path, 'w', encoding='utf-8') as f:
                 json.dump([shot.model_dump() for shot in storyboard], f, ensure_ascii=False, indent=4)
             print(f"✅ Designed storyboard and saved to {storyboard_path}.")
+
 
         # apply shot limit if configured
         if self.max_shots is not None:

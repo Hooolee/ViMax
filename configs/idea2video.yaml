@@ -12,12 +12,12 @@ image_generator:
     base_url: http://127.0.0.1:5345
 
 video_generator:
-  class_path: tools.VideoGeneratorDoubaoSeedanceOfficialAPI
+  class_path: tools.VideoGeneratorJimeng
   init_args:
-    api_key: 
+    api_key: a0a607f1ed99078cb26c75863b5a687f
 
-working_dir: .working_dir/idea2video  # 基础路径，子目录会在脚本中指定
+working_dir: .working_dir/idea2video # 基础路径，子目录会在脚本中指定
 
 # Limit the number of scene scripts to process in Idea2Video for cost control.
 # Set to 1 to only generate the first scene for validation. Omit or set to 0 to process all scenes.
-max_scenes: 1
+max_scenes: 0

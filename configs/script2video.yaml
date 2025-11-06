@@ -1,22 +1,23 @@
 chat_model:
   init_args:
-    model: google/gemini-2.5-flash-lite-preview-09-2025
-    model_provider: openai
-    api_key:
-    base_url: https://openrouter.ai/api/v1
+    model: gemini-2.5-pro
+    model_provider: gemini # custom alias; mapped to google_genai by utils/model_init.py
+    api_key: sk-123
+    base_url: http://127.0.0.1:5345 # ignored for gemini alias; use HTTPS_PROXY for forward proxy if needed
 
 image_generator:
   class_path: tools.ImageGeneratorNanobananaGoogleAPI
   init_args:
-    api_key:
+    api_key: sk-028228020d844ff58d283cc882d6241b
+    base_url: http://127.0.0.1:5345
 
 video_generator:
   class_path: tools.VideoGeneratorVeoGoogleAPI
   init_args:
     api_key:
 
-working_dir: .working_dir  # 基础路径，子目录会在脚本中指定
+working_dir: .working_dir # 基础路径，子目录会在脚本中指定
 
 # Limit the number of shots to process in Script2Video for validation/cost control.
 # Set to 1 to only process the first shot; omit or set to 0 to process all shots.
-max_shots: 1
+max_shots: 0

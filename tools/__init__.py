@@ -13,6 +13,7 @@ from .video_generator_doubao_seedance_yunwu_api import VideoGeneratorDoubaoSeeda
 from .video_generator_veo_google_api import VideoGeneratorVeoGoogleAPI
 from .video_generator_veo_yunwu_api import VideoGeneratorVeoYunwuAPI
 from .video_generator_doubao_seedance_official_api import VideoGeneratorDoubaoSeedanceOfficialAPI
+from .video_generator_jimeng import VideoGeneratorJimeng
 
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "VideoGeneratorVeoGoogleAPI",
     "VideoGeneratorVeoYunwuAPI",
     "VideoGeneratorDoubaoSeedanceOfficialAPI",
+    "VideoGeneratorJimeng",
 ]

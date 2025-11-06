@@ -1,8 +1,8 @@
 import os
 import logging
-from agents import Screenwriter, CharacterExtractor, CharacterPortraitsGenerator
+from agents import Screenwriter, CharacterExtractor, CharacterPortraitsGenerator, ScenePlanner
 from pipelines.script2video_pipeline import Script2VideoPipeline
-from interfaces import CharacterInScene
+from interfaces import CharacterInScene, SceneDefinition
 from typing import List, Dict, Optional
 import asyncio
 import json
@@ -28,6 +28,7 @@ class Idea2VideoPipeline:
         os.makedirs(self.working_dir, exist_ok=True)
 
         self.screenwriter = Screenwriter(chat_model=self.chat_model)
+        self.scene_planner = ScenePlanner(chat_model=self.chat_model)
         self.character_extractor = CharacterExtractor(chat_model=self.chat_model)
         self.character_portraits_generator = CharacterPortraitsGenerator(image_generator=self.image_generator)
 
@@ -80,9 +81,35 @@ class Idea2VideoPipeline:
             max_scenes=max_scenes,
         )
 
+    async def plan_scenes(
+        self,
+        script: str,
+    ) -> List[SceneDefinition]:
+        """
+        统一规划场景，为整个 Idea2Video 流程提供一致的场景定义
+        """
+        logging.info("="*80)
+        logging.info("🎬 [Pipeline Stage] Planning Scene Segmentation")
+        logging.info("="*80)
+        save_path = os.path.join(self.working_dir, "scenes.json")
+
+        if os.path.exists(save_path):
+            with open(save_path, "r", encoding="utf-8") as f:
+                scenes = json.load(f)
+            scenes = [SceneDefinition.model_validate(scene) for scene in scenes]
+            print(f"🚀 Loaded {len(scenes)} scenes from existing file.")
+        else:
+            scenes = await self.scene_planner.plan_scenes(script)
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump([scene.model_dump() for scene in scenes], f, ensure_ascii=False, indent=4)
+            print(f"✅ Planned {len(scenes)} scenes and saved to {save_path}.")
+
+        return scenes
+
     async def extract_characters(
         self,
         story: str,
+        scenes: Optional[List[SceneDefinition]] = None,
     ):
         logging.info("="*80)
         logging.info("👥 [Pipeline Stage] Extract Characters")
@@ -95,7 +122,7 @@ class Idea2VideoPipeline:
             characters = [CharacterInScene.model_validate(character) for character in characters]
             print(f"🚀 Loaded {len(characters)} characters from existing file.")
         else:
-            characters = await self.character_extractor.extract_characters(story)
+            characters = await self.character_extractor.extract_characters(story, scenes=scenes)
             with open(save_path, "w", encoding="utf-8") as f:
                 json.dump([character.model_dump() for character in characters], f, ensure_ascii=False, indent=4)
             print(f"✅ Extracted {len(characters)} characters from story and saved to {save_path}.")
@@ -241,43 +268,73 @@ class Idea2VideoPipeline:
         style: str,
     ):
 
+        # 步骤 1: 发展故事
         story = await self.develop_story(idea=idea, user_requirement=user_requirement)
 
-        characters = await self.extract_characters(story=story)
+        # 步骤 2: 编写剧本（按场景分段）
+        scene_scripts = await self.write_script_based_on_story(story=story, user_requirement=user_requirement)
 
+        # 步骤 3: 统一场景规划
+        # 将所有场景剧本合并为完整剧本，用于场景规划
+        full_script = "\n\n".join(scene_scripts)
+        scenes = await self.plan_scenes(script=full_script)
+        
+        # 验证场景数量是否匹配
+        if len(scenes) != len(scene_scripts):
+            logging.warning(
+                f"⚠️ Scene count mismatch: ScenePlanner identified {len(scenes)} scenes, "
+                f"but Screenwriter wrote {len(scene_scripts)} scene scripts. "
+                f"This may cause scene_id inconsistencies."
+            )
+
+        # 步骤 4: 提取角色（使用统一的场景定义）
+        characters = await self.extract_characters(story=story, scenes=scenes)
+
+        # 步骤 5: 生成角色肖像
         character_portraits_registry = await self.generate_character_portraits(
             characters=characters,
             character_portraits_registry=None,
             style=style,
         )
 
-        scene_scripts = await self.write_script_based_on_story(story=story, user_requirement=user_requirement)
-
         all_video_paths = []
 
         # optionally limit scenes for validation/cost control
         limited_scene_scripts = scene_scripts
+        limited_scenes = scenes
         if self.max_scenes is not None:
             limited_scene_scripts = scene_scripts[: self.max_scenes]
+            limited_scenes = scenes[: self.max_scenes]
             logging.info(f"⚠️  Limited scenes: processing {len(limited_scene_scripts)} out of {len(scene_scripts)} scenes (max_scenes={self.max_scenes})")
         else:
             logging.info(f"📝 Processing all {len(scene_scripts)} scenes (max_scenes not set)")
 
+        # 步骤 6: 为每个场景生成视频（传递对应的场景定义）
         for idx, scene_script in enumerate(limited_scene_scripts):
             scene_working_dir = os.path.join(self.working_dir, f"scene_{idx}")
             os.makedirs(scene_working_dir, exist_ok=True)
+            
+            # 获取当前场景的定义
+            scene_definition = limited_scenes[idx] if idx < len(limited_scenes) else None
+            if scene_definition:
+                logging.info(f"📍 Processing Scene {idx}: {scene_definition.location} - {scene_definition.time_of_day}")
+            
             script2video_pipeline = Script2VideoPipeline(
                 chat_model=self.chat_model,
                 image_generator=self.image_generator,
                 video_generator=self.video_generator,
                 working_dir=scene_working_dir,
             )
+            
+            # 将统一的场景定义传递给 Script2Video
+            # 注意：这里传递单个场景的定义
             final_video_path = await script2video_pipeline(
                 script=scene_script,
                 user_requirement=user_requirement,
                 style=style,
                 characters=characters,
                 character_portraits_registry=character_portraits_registry,
+                scenes=[scene_definition] if scene_definition else None,  # 传递单场景定义
             )
             all_video_paths.append(final_video_path)
 

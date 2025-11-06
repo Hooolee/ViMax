@@ -1,11 +1,12 @@
 import logging
 import re
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 from tenacity import retry, stop_after_attempt
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain.chat_models import init_chat_model
+from interfaces import CharacterInScene
+from interfaces.scene import SceneDefinition
 from utils.image import image_path_to_b64
 
 from utils.retry import after_func
@@ -260,24 +261,68 @@ Return ONLY the generated text prompt, no additional explanation.
         self,
         available_image_path_and_text_pairs: List[Tuple[str, str]],
         frame_description: str,
-        style: str = None,  # 添加 style 参数
+        style: str = None,
+        scene_id: int = None,  # 场景ID
+        characters: List[CharacterInScene] = None,  # 角色列表
+        scene_definition: SceneDefinition = None,  # 新增：场景定义
     ):
+        """选择参考图像并生成提示词
+        
+        Args:
+            available_image_path_and_text_pairs: 可用的图像路径和描述对列表
+            frame_description: 帧描述
+            style: 视觉风格
+            scene_id: 当前场景ID（用于过滤角色外观）
+            characters: 角色列表（用于过滤角色外观）
+            scene_definition: 场景定义（用于增强场景一致性）
+        
+        Returns:
+            包含选中的参考图像和生成的提示词的字典
+        """
         logging.info("="*80)
         logging.info("🔍 [Agent: ReferenceImageSelector] Selecting reference images and generating prompt...")
+        if scene_id is not None:
+            logging.info(f"   Scene ID: {scene_id}")
+        if scene_definition:
+            logging.info(f"   Scene: {scene_definition.location}" + 
+                        (f" ({scene_definition.time_of_day})" if scene_definition.time_of_day else ""))
         logging.info("="*80)
-        filtered_image_path_and_text_pairs = available_image_path_and_text_pairs
+        
+        # 过滤图像：只保留该场景对应的角色外观
+        filtered_image_path_and_text_pairs = self._filter_images_by_scene(
+            available_image_path_and_text_pairs, 
+            scene_id, 
+            characters
+        )
+        
+        if len(filtered_image_path_and_text_pairs) < len(available_image_path_and_text_pairs):
+            logging.info(f"🎭 Filtered by scene appearance: {len(available_image_path_and_text_pairs)} -> {len(filtered_image_path_and_text_pairs)} images")
+
+        # 构建场景上下文信息（如果提供了场景定义）
+        scene_context = ""
+        if scene_definition:
+            scene_context = f"\n\n**SCENE CONTEXT (CRITICAL FOR CONSISTENCY):**\n"
+            scene_context += f"- Location: {scene_definition.location}\n"
+            if scene_definition.time_of_day:
+                scene_context += f"- Time of Day: {scene_definition.time_of_day}\n"
+            scene_context += f"- Scene Description: {scene_definition.description}\n"
+            scene_context += f"\n**IMPORTANT**: The generated image MUST maintain environmental consistency with this scene context. "
+            scene_context += f"The background, lighting, atmosphere, and overall setting should match the location and time specified above.\n"
+        
+        if len(filtered_image_path_and_text_pairs) < len(available_image_path_and_text_pairs):
+            logging.info(f"🎭 Filtered by scene appearance: {len(available_image_path_and_text_pairs)} -> {len(filtered_image_path_and_text_pairs)} images")
 
         # 1. filter images using text-only model
-        if len(available_image_path_and_text_pairs) >= 8:
+        if len(filtered_image_path_and_text_pairs) >= 8:
             human_content = []
-            for idx, (_, text) in enumerate(available_image_path_and_text_pairs):
+            for idx, (_, text) in enumerate(filtered_image_path_and_text_pairs):
                 human_content.append({
                     "type": "text",
                     "text": f"Image {idx}: {text}"
                 })
             human_content.append({
                 "type": "text",
-                "text": human_prompt_template_select_reference_images.format(frame_description=frame_description)
+                "text": human_prompt_template_select_reference_images.format(frame_description=frame_description) + scene_context
             })
             parser = PydanticOutputParser(pydantic_object=RefImageIndicesAndTextPrompt)
 
@@ -290,8 +335,8 @@ Return ONLY the generated text prompt, no additional explanation.
 
             try:
                 ref = await chain.ainvoke(messages)
-                filtered_image_path_and_text_pairs = [available_image_path_and_text_pairs[i] for i in ref.ref_image_indices]
-                logging.info(f"🔍 Pre-filtered {len(available_image_path_and_text_pairs)} -> {len(ref.ref_image_indices)} images: {ref.ref_image_indices}")
+                filtered_image_path_and_text_pairs = [filtered_image_path_and_text_pairs[i] for i in ref.ref_image_indices]
+                logging.info(f"🔍 Pre-filtered {len(filtered_image_path_and_text_pairs)} -> {len(ref.ref_image_indices)} images: {ref.ref_image_indices}")
                 
             except Exception as e:
                 logging.error(f"Error get image prompt: \n{e}")
@@ -310,7 +355,7 @@ Return ONLY the generated text prompt, no additional explanation.
             })
         human_content.append({
             "type": "text",
-            "text": human_prompt_template_select_reference_images.format(frame_description=frame_description)
+            "text": human_prompt_template_select_reference_images.format(frame_description=frame_description) + scene_context
         })
 
         parser = PydanticOutputParser(pydantic_object=RefImageIndicesAndTextPrompt)
@@ -362,7 +407,7 @@ Return ONLY the generated text prompt, no additional explanation.
                 text_only_human_content.append({"type": "text", "text": f"Image {idx}: {text}"})
             text_only_human_content.append({
                 "type": "text",
-                "text": human_prompt_template_select_reference_images.format(frame_description=frame_description)
+                "text": human_prompt_template_select_reference_images.format(frame_description=frame_description) + scene_context
             })
 
             text_only_messages = [
@@ -486,3 +531,79 @@ Return ONLY the generated text prompt, no additional explanation.
             # require at least one character mapping to avoid total omission
             if not mapped_any:
                 raise ValueError("text_prompt lacks explicit mapping for any visible character element")
+
+        return text_prompt
+
+
+    def _filter_images_by_scene(
+        self,
+        available_pairs: List[Tuple[str, str]],
+        scene_id: Optional[int],
+        characters: Optional[List[CharacterInScene]],
+    ) -> List[Tuple[str, str]]:
+        """根据场景ID过滤图像，只保留该场景对应的角色外观
+        
+        Args:
+            available_pairs: 所有可用的图像路径和描述对
+            scene_id: 当前场景ID
+            characters: 角色列表
+        
+        Returns:
+            过滤后的图像路径和描述对列表
+        """
+        if scene_id is None or characters is None:
+            # 如果没有提供场景ID或角色列表，返回所有图像（向后兼容）
+            return available_pairs
+        
+        filtered_pairs = []
+        
+        for image_path, image_desc in available_pairs:
+            should_keep = True
+            
+            # 检查这是否是角色肖像
+            # 角色肖像的路径通常包含 "character_portraits" 和角色名称
+            is_character_portrait = "character_portraits" in image_path
+            
+            if is_character_portrait:
+                # 提取appearance_id（如果有）
+                # 路径格式：.../character_portraits/{idx}_{name}/appearance_X/{view}.png
+                appearance_match = re.search(r'/appearance_(\d+)/', image_path)
+                
+                if appearance_match:
+                    # 这是一个特定外观的肖像
+                    appearance_id = f"appearance_{appearance_match.group(1)}"
+                    
+                    # 查找这个肖像属于哪个角色
+                    char_found = False
+                    for character in characters:
+                        # 检查路径中是否包含角色标识符
+                        if character.identifier_in_scene in image_path:
+                            char_found = True
+                            # 检查这个外观是否适用于当前场景
+                            appearance = None
+                            for app in character.appearances:
+                                if app.appearance_id == appearance_id:
+                                    appearance = app
+                                    break
+                            
+                            if appearance:
+                                # 检查这个外观是否适用于当前场景
+                                if appearance.scene_ids and scene_id not in appearance.scene_ids:
+                                    # 这个外观不适用于当前场景，过滤掉
+                                    should_keep = False
+                                    logging.debug(f"   Filtered out {appearance_id} of {character.identifier_in_scene} (not for scene {scene_id})")
+                                # 如果 scene_ids 为空，表示默认外观，适用于所有场景
+                            break
+                    
+                    if not char_found:
+                        # 无法确定角色，保留图像（安全起见）
+                        logging.debug(f"   Could not determine character for {image_path}, keeping it")
+                else:
+                    # 旧格式的肖像（没有appearance_id），保留（向后兼容）
+                    logging.debug(f"   Legacy portrait format (no appearance_id): {image_path}")
+            
+            # 非角色肖像的图像（如场景图像）总是保留
+            if should_keep:
+                filtered_pairs.append((image_path, image_desc))
+        
+        return filtered_pairs

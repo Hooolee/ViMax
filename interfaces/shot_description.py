@@ -11,6 +11,12 @@ class ShotBriefDescription(BaseModel):
         description="Whether this is the last shot. If True, the story of the script has ended and no more shots will be planned after this one.",
         examples=[False, True],
     )
+    
+    scene_id: Optional[int] = Field(
+        default=None,
+        description="The index of the scene this shot belongs to, starting from 0. Used for character appearance filtering.",
+        examples=[0, 1, 2, None],
+    )
 
     # visual
     cam_idx: int = Field(
@@ -169,6 +175,12 @@ class ShotDescription(BaseModel):
     )
     is_last: bool = Field(
         description="Whether this is the last shot in the sequence. If True, no more shots will be planned after this one."
+    )
+    
+    scene_id: Optional[int] = Field(
+        default=None,
+        description="The index of the scene this shot belongs to, starting from 0. Used for character appearance filtering.",
+        examples=[0, 1, 2, None],
     )
 
     # visual

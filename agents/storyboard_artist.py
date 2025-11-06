@@ -8,6 +8,7 @@ from langchain.chat_models.base import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from interfaces import CharacterInScene, ShotDescription, ShotBriefDescription
+from interfaces.scene import SceneDefinition
 
 from utils.retry import after_func
 
@@ -28,8 +29,9 @@ Your task is to design a complete storyboard based on a user-provided script (wh
 
 [Input]
 The user will provide the following input.
-- Script:A complete scene script containing dialogue, action descriptions, and scene settings. The script focuses on only one scene; there is no need to handle multiple scene transitions. The script input is enclosed within <SCRIPT> and </SCRIPT>.
+- Script: A complete scene script containing dialogue, action descriptions, and scene settings. The script focuses on only one scene; there is no need to handle multiple scene transitions. The script input is enclosed within <SCRIPT> and </SCRIPT>.
 - Characters List: A list describing basic information for each character, such as name, personality traits, appearance (if relevant). The character list is enclosed within <CHARACTERS> and </CHARACTERS>.
+- Scenes: Pre-defined scene segmentation with scene IDs. You MUST use these scene IDs when assigning shots to scenes. The scene information is enclosed within <SCENES> and </SCENES>.
 - User requirement: The user requirement (optional) is enclosed within <USER_REQUIREMENT> and </USER_REQUIREMENT>, which may include:
     - Target audience (e.g., children, teenagers, adults).
     - Storyboard style (e.g., realistic, cartoon, abstract).
@@ -41,6 +43,8 @@ The user will provide the following input.
 
 [Guidelines]
 - Ensure all output values (except keys) match the language used in the script.
+- **Scene Identification - IMPORTANT**: Use the pre-defined scene IDs provided in the <SCENES> section. Assign each shot's `scene_id` based on which scene it belongs to according to the scene definitions. The scene_id is crucial for tracking character appearance changes across different scenes and ensuring visual continuity.
+- If a shot spans multiple scenes (e.g., a transition shot), assign it to the scene where it primarily takes place.
 - Each shot must have a clear narrative purpose—such as establishing the setting, showing character relationships, or highlighting reactions.
 - Use cinematic language deliberately: close-ups for emotion, wide shots for context, and varied angles to direct audience attention.
 - For each shot, explicitly set cinematography parameters: `shot_size`, `angle`, `camera_height`, `lens_equiv_mm` (35mm equivalent), `screen_direction` (e.g., L_to_R / R_to_L / toward / away / static), `transition_in`, `transition_out`, `beat` (slow/moderate/fast), and `duration_sec_estimate` (in seconds).
@@ -64,6 +68,10 @@ human_prompt_template_design_storyboard = \
 <CHARACTERS>
 {characters_str}
 </CHARACTERS>
+
+<SCENES>
+{scenes_str}
+</SCENES>
 
 <USER_REQUIREMENT>
 {user_requirement_str}
@@ -182,9 +190,27 @@ class StoryboardArtist:
         self,
         script: str,
         characters: List[CharacterInScene],
+        scenes: List[SceneDefinition] = None,
         user_requirement: Optional[str] = None,
         retry_timeout: int = 150,
     ) -> List[ShotBriefDescription]:
+        """
+        根据剧本设计分镜
+        
+        Design storyboard based on the script.
+        
+        Args:
+            script: The complete script text
+            characters: List of characters in the script
+            scenes: Pre-defined scene segmentation. If provided, shots will be assigned
+                   to these scene IDs. If None, storyboard artist will identify scenes
+                   independently (not recommended).
+            user_requirement: Optional user requirements for the storyboard
+            retry_timeout: Timeout for each retry attempt
+            
+        Returns:
+            List of ShotBriefDescription objects with scene_id assigned
+        """
         logging.info("="*80)
         logging.info("🎨 [Agent: StoryboardArtist] Starting storyboard design...")
         logging.info("="*80)
@@ -197,11 +223,30 @@ class StoryboardArtist:
         script_str = script.strip()
         characters_str = "\n".join([f"Character {index}: {char}" for index, char in enumerate(characters)])
         user_requirement_str = user_requirement.strip() if user_requirement else ""
-
+        
+        # Format scenes information
+        scenes_str = ""
+        if scenes:
+            scenes_str = "The script has been segmented into the following scenes. Use these scene IDs:\n\n"
+            scenes_str += "\n".join([
+                f"- Scene {scene.scene_id}: {scene.location}"
+                f"{f' ({scene.time_of_day})' if scene.time_of_day else ''} - {scene.description}"
+                for scene in scenes
+            ])
+            logging.info(f"Using {len(scenes)} pre-defined scene(s) for storyboard design")
+        else:
+            scenes_str = "No scene definitions provided. You must identify and assign scene IDs yourself."
+            logging.warning("No scene definitions provided! Storyboard artist will identify scenes independently.")
+        
         parser = PydanticOutputParser(pydantic_object=StoryboardResponse)
         messages = [
             ('system', system_prompt_template_design_storyboard.format(format_instructions=parser.get_format_instructions())),
-            ('human', human_prompt_template_design_storyboard.format(script_str=script_str, characters_str=characters_str, user_requirement_str=user_requirement_str)),
+            ('human', human_prompt_template_design_storyboard.format(
+                script_str=script_str, 
+                characters_str=characters_str, 
+                scenes_str=scenes_str,
+                user_requirement_str=user_requirement_str
+            )),
         ]
         chain = self.chat_model | parser
         response: StoryboardResponse = await asyncio.wait_for(
@@ -209,6 +254,8 @@ class StoryboardArtist:
             timeout=retry_timeout,
         )
         storyboard = response.storyboard
+
+        logging.info(f"✅ Generated storyboard with {len(storyboard)} shot(s)")
 
         return storyboard
 
