@@ -31,6 +31,7 @@ class Script2VideoPipeline:
         video_generator,
         working_dir: str,
         max_shots: int | None = None,
+        interactive_mode: bool = False,
     ):
 
         self.chat_model = chat_model
@@ -47,6 +48,7 @@ class Script2VideoPipeline:
 
         self.working_dir = working_dir
         self.max_shots = max_shots
+        self.interactive_mode = interactive_mode
         os.makedirs(self.working_dir, exist_ok=True)
 
 
@@ -77,6 +79,7 @@ class Script2VideoPipeline:
         # optional shot limiter for validation/cost control
         max_shots = None
         cfg_max_shots = config.get("max_shots")
+        interactive_mode = config.get("interactive_mode", False)
         if isinstance(cfg_max_shots, int) and cfg_max_shots > 0:
             max_shots = cfg_max_shots
 
@@ -93,7 +96,35 @@ class Script2VideoPipeline:
             video_generator=video_generator,
             working_dir=working_dir,
             max_shots=max_shots,
+            interactive_mode=interactive_mode,
         )
+
+    def wait_for_user_confirmation(self, stage_name: str, display_content: str = "") -> str:
+        """
+        等待用户确认后继续
+        
+        Args:
+            stage_name: 当前阶段名称
+            display_content: 要显示给用户的内容
+            
+        Returns:
+            用户选择 ('c' 继续, 'r' 重试, 'q' 退出)
+        """
+        if not self.interactive_mode:
+            return "c"
+            
+        print("\n" + "="*80)
+        print(f"📋 {stage_name}")
+        print("="*80)
+        if display_content:
+            print(display_content)
+            print("="*80)
+        
+        while True:
+            choice = input("\n请选择操作:\n  [c] 继续下一步\n  [r] 重新生成\n  [q] 退出程序\n> ").strip().lower()
+            if choice in ['c', 'r', 'q']:
+                return choice
+            print("❌ 无效输入，请输入 c、r 或 q")
 
     async def __call__(
         self,
@@ -220,14 +251,64 @@ class Script2VideoPipeline:
             for camera in camera_tree
         ]
 
-        video_tasks = [
-            self.generate_video_for_single_shot(
-                shot_description=shot_description,
-            )
-            for shot_description in shot_descriptions
-        ]
-        tasks.extend(video_tasks)
+        # 等待所有帧生成完成
         await asyncio.gather(*tasks)
+
+        # 视频生成部分 - 根据 interactive_mode 决定是否顺序生成并交互
+        if self.interactive_mode:
+            # 交互模式：顺序生成每个分镜视频，并等待用户确认
+            for shot_description in shot_descriptions:
+                while True:
+                    # 生成单个分镜视频
+                    await self.generate_video_for_single_shot(
+                        shot_description=shot_description,
+                    )
+                    
+                    # 准备显示内容
+                    video_path = os.path.join(self.working_dir, "shots", f"{shot_description.idx}", "video.mp4")
+                    display_content = f"""
+🎬 分镜 #{shot_description.idx} 已生成完成
+
+📝 分镜描述:
+  场景: {shot_description.scene_id}
+  镜头尺寸: {shot_description.shot_size}
+  镜头角度: {shot_description.camera_angle}
+  
+  首帧描述: {shot_description.ff_desc[:100]}...
+  运动描述: {shot_description.motion_desc[:100]}...
+  
+📁 视频路径: {video_path}
+"""
+                    
+                    # 等待用户确认
+                    choice = self.wait_for_user_confirmation(
+                        stage_name=f"分镜视频生成 - 第 {shot_description.idx + 1}/{len(shot_descriptions)} 个",
+                        display_content=display_content
+                    )
+                    
+                    if choice == 'c':
+                        # 继续下一个分镜
+                        print(f"✅ 分镜 #{shot_description.idx} 已确认，继续生成下一个分镜...")
+                        break
+                    elif choice == 'r':
+                        # 重新生成 - 删除已生成的视频文件
+                        print(f"🔄 重新生成分镜 #{shot_description.idx} 的视频...")
+                        if os.path.exists(video_path):
+                            os.remove(video_path)
+                            print(f"已删除旧视频: {video_path}")
+                        # 继续循环重新生成
+                    elif choice == 'q':
+                        print("⚠️ 用户选择退出，停止视频生成流程")
+                        raise KeyboardInterrupt("用户主动退出")
+        else:
+            # 非交互模式：并发生成所有视频
+            video_tasks = [
+                self.generate_video_for_single_shot(
+                    shot_description=shot_description,
+                )
+                for shot_description in shot_descriptions
+            ]
+            await asyncio.gather(*video_tasks)
 
         final_video_path = os.path.join(self.working_dir, "final_video.mp4")
         timeline_edl_path = os.path.join(self.working_dir, "timeline.edl")
@@ -535,97 +616,115 @@ class Script2VideoPipeline:
         else:
             print(f"🖼️ Starting {frame_type} generation for shot {shot_idx}...")
             available_image_path_and_text_pairs = []
+            
+            # 获取当前帧的角色朝向信息
+            char_orientations = None
+            if frame_type == "first_frame":
+                char_orientations = shot_descriptions[shot_idx].ff_char_orientations
+            elif frame_type == "last_frame":
+                char_orientations = shot_descriptions[shot_idx].lf_char_orientations
+            
+            # 根据角色朝向选择对应的三视图
             for visible_character in visible_characters:
                 identifier_in_scene = visible_character.identifier_in_scene
+                char_idx = visible_character.idx
                 registry_item = character_portraits_registry[identifier_in_scene]
+                
+                # 确定应该使用哪个视角
+                desired_view = "front"  # 默认正面
+                if char_orientations and char_idx in char_orientations:
+                    desired_view = char_orientations[char_idx]
                 
                 # 处理新的嵌套结构（包含 appearance_id）
                 for appearance_or_view, content in registry_item.items():
                     if isinstance(content, dict) and "path" in content:
                         # 旧格式：直接是 {view: {path, description}}
-                        available_image_path_and_text_pairs.append((content["path"], content["description"]))
+                        view = appearance_or_view
+                        if view == desired_view:
+                            available_image_path_and_text_pairs.append((content["path"], content["description"]))
+                            logging.info(f"✅ 优化: 为角色 {identifier_in_scene} 选择了 {desired_view} 视角")
+                            break
                     else:
                         # 新格式：{appearance_id: {view: {path, description}}}
-                        for view, item in content.items():
+                        # 在当前 appearance 中查找对应视角
+                        if desired_view in content:
+                            item = content[desired_view]
                             available_image_path_and_text_pairs.append((item["path"], item["description"]))
+                            logging.info(f"✅ 优化: 为角色 {identifier_in_scene} ({appearance_or_view}) 选择了 {desired_view} 视角")
+                            break
 
-            # P1 优化：收集所有已完成的帧作为环境参考
-            # 这解决了并发生成时每个镜头只能看到第一个镜头首帧的问题
-            completed_frames = []
-            
-            # 遍历所有镜头，收集已完成的帧
-            if shot_descriptions is not None:
-                for other_shot_idx in range(len(shot_descriptions)):
-                    # 不添加当前正在生成的帧本身
-                    if other_shot_idx == shot_idx and frame_type == "first_frame":
-                        continue
-                    if other_shot_idx == shot_idx and frame_type == "last_frame":
-                        # 对于末帧生成，可以使用自己的首帧
-                        ff_event = self.frame_events.get(other_shot_idx, {}).get("first_frame")
-                        if ff_event and ff_event.is_set():
-                            ff_path = os.path.join(self.working_dir, "shots", f"{other_shot_idx}", "first_frame.png")
-                            if os.path.exists(ff_path):
-                                # 添加镜头信息用于后续排序
-                                completed_frames.append({
-                                    "shot_idx": other_shot_idx,
-                                    "frame_type": "first_frame",
-                                    "path": ff_path,
-                                    "scene_id": shot_descriptions[other_shot_idx].scene_id if other_shot_idx < len(shot_descriptions) else None,
-                                })
-                        continue
-                    
-                    # 检查首帧是否完成
-                    ff_event = self.frame_events.get(other_shot_idx, {}).get("first_frame")
-                    if ff_event and ff_event.is_set():
-                        ff_path = os.path.join(self.working_dir, "shots", f"{other_shot_idx}", "first_frame.png")
-                        if os.path.exists(ff_path):
-                            completed_frames.append({
-                                "shot_idx": other_shot_idx,
-                                "frame_type": "first_frame",
-                                "path": ff_path,
-                                "scene_id": shot_descriptions[other_shot_idx].scene_id if other_shot_idx < len(shot_descriptions) else None,
-                            })
-                    
-                    # 检查末帧是否完成
-                    lf_event = self.frame_events.get(other_shot_idx, {}).get("last_frame")
-                    if lf_event and lf_event.is_set():
-                        lf_path = os.path.join(self.working_dir, "shots", f"{other_shot_idx}", "last_frame.png")
-                        if os.path.exists(lf_path):
-                            completed_frames.append({
-                                "shot_idx": other_shot_idx,
-                                "frame_type": "last_frame",
-                                "path": lf_path,
-                                "scene_id": shot_descriptions[other_shot_idx].scene_id if other_shot_idx < len(shot_descriptions) else None,
-                            })
-            
-            # 排序：优先添加同场景的帧，然后按时间顺序（镜头索引）
+            # P1 优化：收集已完成的帧作为环境参考（优化版）
+            # 只收集前一个镜头的尾帧（如果是同场景）
             current_scene_id = shot_descriptions[shot_idx].scene_id if shot_descriptions and shot_idx < len(shot_descriptions) else None
-            completed_frames.sort(key=lambda x: (
-                0 if x["scene_id"] == current_scene_id else 1,  # 同场景优先
-                -x["shot_idx"],  # 时间上更近的帧优先（倒序，较大的索引先）
-            ))
             
-            # 添加已完成的帧到参考列表，限制数量避免过多
-            max_environment_refs = 5  # 最多添加5个环境参考帧
-            added_env_refs = 0
-            for frame_info in completed_frames:
-                if added_env_refs >= max_environment_refs:
-                    break
+            if shot_idx > 0:
+                prev_shot_idx = shot_idx - 1
+                prev_scene_id = shot_descriptions[prev_shot_idx].scene_id if shot_descriptions and prev_shot_idx < len(shot_descriptions) else None
                 
-                # 生成描述文本
-                desc_text = f"Environment reference from shot {frame_info['shot_idx']} {frame_info['frame_type']}"
-                if frame_info["scene_id"] == current_scene_id:
-                    desc_text += " (same scene - high priority for environment consistency)"
-                
-                available_image_path_and_text_pairs.append((frame_info["path"], desc_text))
-                added_env_refs += 1
+                # 只有同场景才使用前一个镜头的帧
+                if prev_scene_id == current_scene_id:
+                    # 优先使用末帧（如果有）
+                    lf_event = self.frame_events.get(prev_shot_idx, {}).get("last_frame")
+                    if lf_event and lf_event.is_set():
+                        lf_path = os.path.join(self.working_dir, "shots", f"{prev_shot_idx}", "last_frame.png")
+                        if os.path.exists(lf_path):
+                            available_image_path_and_text_pairs.append((
+                                lf_path,
+                                f"Previous shot {prev_shot_idx} last frame (for temporal continuity)"
+                            ))
+                            logging.info(f"✅ 优化: 使用前一个镜头 #{prev_shot_idx} 的末帧作为环境参考")
+                    else:
+                        # 没有末帧，使用首帧
+                        ff_event = self.frame_events.get(prev_shot_idx, {}).get("first_frame")
+                        if ff_event and ff_event.is_set():
+                            ff_path = os.path.join(self.working_dir, "shots", f"{prev_shot_idx}", "first_frame.png")
+                            if os.path.exists(ff_path):
+                                available_image_path_and_text_pairs.append((
+                                    ff_path,
+                                    f"Previous shot {prev_shot_idx} first frame (for temporal continuity)"
+                                ))
+                                logging.info(f"✅ 优化: 使用前一个镜头 #{prev_shot_idx} 的首帧作为环境参考")
+                else:
+                    logging.info(f"⚠️ 场景切换: 镜头 #{shot_idx} (场景{current_scene_id}) 与前一镜头 #{prev_shot_idx} (场景{prev_scene_id}) 不在同一场景，不使用前一镜头的帧")
             
-            if added_env_refs > 0:
-                print(f"✨ P1优化: 添加了 {added_env_refs} 个已完成的帧作为环境参考")
-
-            # 仍然保留第一个镜头的首帧引用（向后兼容）
-            available_image_path_and_text_pairs.append(first_shot_ff_path_and_text_pair)
-
+            # P4 优化：Camera 空间一致性锚点
+            # 对于长镜头序列（Camera 内镜头数 >= 5），且当前镜头与首镜头间隔 >= 3，
+            # 在同场景的情况下，添加 Camera 首镜头的首帧作为空间参考
+            if first_shot_ff_path_and_text_pair is not None:
+                first_shot_ff_path, first_shot_ff_desc = first_shot_ff_path_and_text_pair
+                
+                # 从路径中提取首镜头的 shot_idx
+                # 路径格式：/path/to/working_dir/shots/{shot_idx}/first_frame.png
+                import re
+                match = re.search(r'/shots/(\d+)/first_frame\.png', first_shot_ff_path)
+                if match:
+                    first_shot_idx = int(match.group(1))
+                    first_shot_scene_id = shot_descriptions[first_shot_idx].scene_id if shot_descriptions and first_shot_idx < len(shot_descriptions) else None
+                    
+                    # 计算当前镜头与首镜头的间隔
+                    shot_gap = shot_idx - first_shot_idx
+                    
+                    # 条件：
+                    # 1. 不是首镜头本身
+                    # 2. 间隔 >= 3（避免与 P1 优化重复）
+                    # 3. 同一场景
+                    # 4. 首帧已生成
+                    if (shot_idx != first_shot_idx 
+                        and shot_gap >= 3 
+                        and current_scene_id == first_shot_scene_id
+                        and os.path.exists(first_shot_ff_path)):
+                        
+                        available_image_path_and_text_pairs.append((
+                            first_shot_ff_path,
+                            f"Camera spatial anchor: first shot {first_shot_idx} first frame (for spatial consistency)"
+                        ))
+                        logging.info(f"✅ P4优化: 镜头 #{shot_idx} 距离首镜头 #{first_shot_idx} 间隔{shot_gap}，添加Camera空间锚点")
+                    else:
+                        if shot_gap < 3:
+                            logging.debug(f"P4跳过: 镜头 #{shot_idx} 距离首镜头仅{shot_gap}个镜头，由P1优化覆盖")
+                        elif current_scene_id != first_shot_scene_id:
+                            logging.debug(f"P4跳过: 镜头 #{shot_idx} (场景{current_scene_id}) 与首镜头 (场景{first_shot_scene_id}) 不在同一场景")
+            
             # P3 优化：增强场景定义传递的防御性检查
             scene_definition = None
             if scene_id is not None:

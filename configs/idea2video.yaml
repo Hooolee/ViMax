@@ -14,7 +14,7 @@ image_generator:
 video_generator:
   class_path: tools.VideoGeneratorJimeng
   init_args:
-    api_key: a0a607f1ed99078cb26c75863b5a687f
+    api_key:
 
 working_dir: .working_dir/idea2video # 基础路径，子目录会在脚本中指定
 

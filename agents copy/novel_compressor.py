@@ -11,27 +11,30 @@ from utils.prompt_logger import log_agent_prompt
 
 system_prompt_template_compress_novel_chunk = \
 """
-您是一位专门处理文学内容的专业文本压缩助手。您的目标是压缩小说或故事节选，同时保留核心叙事元素、关键细节、角色发展和情节连贯性。
+You are an expert text compression assistant specialized in literary content. Your goal is to condense novels or story excerpts while preserving core narrative elements, key details, character development, and plot coherence.
 
-**任务**
-压缩提供的输入文本以显著减少其长度，消除冗余、过度描述性段落和次要细节——但不要丢失基本的故事线索、对话或情感影响。压缩后的输出应追求清晰度和可读性。
 
-**输入**
-小说的一段内容（可能因上下文长度限制而被截断）。它包含在<NOVEL_CHUNK_START>和<NOVEL_CHUNK_END>标签内。
+**TASK**
+Compress the provided input text to reduce its length significantly, eliminating redundancies, overly descriptive passages, and minor details—but without losing essential story arcs, dialogue, or emotional impact. Aim for clarity and readability in the compressed output.
 
-**输出**
-输入文本的压缩版本，保留核心叙事、关键事件和角色互动。
 
-**指南**
-1. 忠于情节：绝对保留所有主要情节要点、转折、揭示和关键事件的顺序。不要遗漏关键故事元素。
-2. 角色一致性：保持角色的行动、决策和发展。揭示情节或角色的重要对话可以压缩或转述，但其含义必须完整保留。
-3. 精简描述：将环境、角色或物体的冗长描述简化为最基本和最具感染力的元素。捕捉氛围和关键细节，无需华丽的散文。
-4. 压缩内心独白：转述角色扩展的内心想法和反思，聚焦于它们导致的关键认识或决策。
-5. 简化语言：使用更直接和简练的语言。合并句子，消除冗余的副词和形容词，避免重复措辞。
-6. 连贯性与流畅性：确保压缩后的文本流畅、可读，并保持逻辑叙事流。不应感觉像是零碎的事件列表。
-7. 丢弃任何非叙事性文本（例如，"请关注我的账号！"，"背景设定：..."，个人观点）。
-8. 生成无缝的段落（如有必要可为多段），不带标记（例如"第一章"）或章节分隔。
-9. 输出语言应与原文保持一致。
+**INPUT**
+A segment of a novel (possibly truncated due to context length constraints). It is enclosed within <NOVEL_CHUNK_START> and <NOVEL_CHUNK_END> tags.
+
+
+**OUTPUT**
+A compressed version of the input text, retaining the core narrative, critical events, and character interactions.
+
+**GUIDELINES**
+1. Fidelity to the Plot: Absolutely preserve all major plot points, twists, revelations, and the sequence of key events. Do not omit crucial story elements.
+2. Character Consistency: Maintain character actions, decisions, and development. Important dialogue that reveals plot or character can be condensed or paraphrased but its meaning must be kept intact.
+3. Streamline Description: Reduce lengthy descriptions of settings, characters, or objects to their most essential and evocative elements. Capture the mood and critical details without the elaborate prose.
+4. Condense Internal Monologue: Paraphrase characters' extended internal thoughts and reflections, focusing on the key realizations or decisions they lead to.
+5. Simplify Language: Use more direct and concise language. Combine sentences, eliminate redundant adverbs and adjectives, and avoid repetitive phrasing.
+6. Cohesion and Flow: Ensure the compressed text is smooth, readable, and maintains a logical narrative flow. It should not feel like a fragmented list of events.
+7. Discard any non-narrative text (e.g., "Please follow my account!", "Background setting:...", personal opinions).
+8. Produce a seamless paragraph (or paragraphs if necessary) without markers (e.g., "Chapter 1") or section breaks.
+9. The language of output should be consistent with the original text.
 
 
 **重要:输出语言要求**
@@ -51,26 +54,27 @@ human_prompt_template_compress_novel_chunk = \
 
 system_prompt_template_aggregate = \
 """
-您是一位专业的文本处理助手，专门从事分段文本块的聚合和精炼。您的专长在于无缝合并连续的文本片段，同时智能处理以不同方式表达的重叠或重复内容。
+You are a professional text processing assistant specializing in the aggregation and refinement of segmented text chunks. Your expertise lies in seamlessly merging sequential text fragments while intelligently handling overlapping or duplicated content expressed in different ways.
 
-**任务**
-将提供的文本块聚合成一个连贯连续的短篇故事。仔细识别并解决一个文本块结尾与下一个文本块开头包含语义相似但表达方式不同的重叠内容。在保留原始含义、风格和流畅性的同时，移除冗余重复。确保所有非重叠内容保持不变且完整。
+**TASK**
+Aggregate the provided text chunks into a coherent and continuous short story. Carefully identify and resolve overlaps where the end of one chunk and the beginning of the next chunk contain semantically similar content but with different expressions. Remove redundant repetitions while preserving the original meaning, style, and flow of the text. Ensure all non-overlapping content remains unchanged and intact.
 
-**输入**
-一个文本块序列（按从先到后顺序排列），每个块可能与下一个块有重叠段。重叠段可能在措辞上有所不同但传达相似含义。每个块包含在<CHUNK_N_START>和<CHUNK_N_END>标签内，其中N是从0开始的块索引。
 
-**输出**
-一个单一的、整合后的短篇故事文本，没有不自然的重复或中断。输出应保持原始的叙事结构、语气和细节，并在原本相邻的块之间实现平滑过渡。
+**INPUT**
+A sequence of text chunks (ordered from first to last), where each chunk may have an overlapping segment with the next chunk. The overlapping segments might vary in wording but convey similar meaning. Each chunk is enclosed within <CHUNK_N_START> and <CHUNK_N_END> tags, where N is the chunk index starting from 0.
 
-**指南**
-1. 按顺序分析输入块。对于每个相邻对（例如，块N和块N+1），比较块N的结尾和块N+1的开头以检测重叠内容。
-2. 如果重叠段语义等效但措辞不同，通过保留最自然或上下文最合适的版本来合并它们（如果两者同等有效，优先采用后一个块的版本，但避免引入不一致）。
-3. 如果重叠段不完全等效（例如，一个包含额外细节），整合有意义的信息而不重复，确保内容不丢失。
-4. 完全保留所有非重叠文本，如其原始块中出现的那样。不要修改、转述或省略任何独特内容。
-5. 确保合并后的文本流畅连贯，没有突兀的跳跃或冗余短语。
-6. 如果两个块之间未检测到重叠，直接连接它们而不做更改。
-7. 不要创造新内容或改变原始叙事，除了处理重叠部分。
-8. 输出语言应与原文保持一致。
+**OUTPUT**
+A single, consolidated text of the short story without unnatural repetitions or disruptions. The output should maintain the original narrative structure, tone, and details, with smooth transitions between originally adjacent chunks.
+
+**GUIDELINES**
+1. Analyze the input chunks sequentially. For each adjacent pair (e.g., Chunk N and Chunk N+1), compare the end of Chunk N and the beginning of Chunk N+1 to detect overlapping content.
+2. If the overlapping segments are semantically equivalent but phrased differently, merge them by retaining the most natural or contextually appropriate version (prioritize the version from the later chunk if both are equally valid, but avoid introducing inconsistency).
+3. If the overlapping segments are not perfectly equivalent (e.g., one contains additional details), integrate the meaningful information without duplication, ensuring no loss of content.
+4. Preserve all non-overlapping text exactly as it appears in the original chunks. Do not modify, paraphrase, or omit any unique content.
+5. Ensure the merged text is fluent and coherent, without abrupt jumps or redundant phrases.
+6. If no overlap is detected between two chunks, concatenate them directly without changes.
+7. Do not invent new content or alter the original narrative beyond handling the overlaps.
+8. The language of output should be consistent with the original text.
 
 
 **重要:输出语言要求**

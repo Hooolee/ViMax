@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2025-11-07
+
+#### 交互模式功能 (Interactive Mode Feature)
+
+**新增功能**：
+
+1. **Idea2Video Pipeline 交互模式** (`pipelines/idea2video_pipeline.py`) 🆕
+
+   - 添加 `interactive_mode` 参数控制是否启用交互模式
+   - 新增 `wait_for_user_confirmation()` 方法：在每个 agent 运行后等待用户确认
+   - 更新所有主要方法，添加用户交互功能：
+     - `develop_story()`: 显示故事预览，支持继续/重试/退出
+     - `write_script_based_on_story()`: 显示场景信息，支持继续/重试/退出
+     - `plan_scenes()`: 显示场景详情，支持继续/重试/退出
+     - `extract_characters()`: 显示角色列表，支持继续/重试/退出
+     - `generate_character_portraits()`: 显示肖像文件，支持继续/重试/退出
+     - 场景视频生成：每个场景完成后等待用户确认
+     - 最终视频生成：显示完成信息并等待确认
+
+2. **用户交互选项**：
+
+   - `[c]` 继续下一步
+   - `[r]` 重新运行当前步骤（自动清理已生成文件）
+   - `[q]` 退出程序
+   - 支持 `Ctrl+C` 和 `EOF` 安全退出
+
+3. **Main Script 更新** (`main_idea2video.py`)
+
+   - 添加 `interactive_mode` 配置参数（默认为 `True`）
+   - 可通过设置 `interactive_mode=False` 禁用交互，自动运行所有步骤
+
+4. **文档** 📚
+   - 新增 `docs/INTERACTIVE_MODE_GUIDE.md`：详细的交互模式使用指南
+   - 新增 `test_interactive_mode.py`：交互模式测试示例
+
+**优势**：
+
+- ✅ 更好的用户控制：每个步骤后可以检查结果
+- ✅ 灵活的工作流：支持重新运行单个步骤而不需要从头开始
+- ✅ 向后兼容：可选功能，不影响现有工作流
+- ✅ 内容预览：每个阶段完成后显示关键信息
+- ✅ 安全退出：支持多种退出方式，不会导致数据损坏
+
 ### Added - 2025-11-06
 
 #### Idea2Video 场景规划集成 (Scene Planning Integration for Idea2Video)

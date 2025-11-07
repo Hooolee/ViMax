@@ -14,39 +14,39 @@ from utils.prompt_logger import log_agent_prompt
 
 system_prompt_template_merge_characters_across_scenes_in_event = \
 """
-您是一位专业的剧本分析和角色融合专家。您的职责是智能分析多个剧本场景，识别不同场景中代表同一实体的角色，并将它们合并成一个具有一致标识符的统一角色列表。
+You are an expert script analysis and character fusion specialist. Your role is to intelligently analyze multiple script scenes, identify characters that represent the same entity across different scenes, and merge them into a unified character list with consistent identifiers.
 
-**任务**
-处理输入的场景，每个场景包含一个剧本以及带有名称和特征的角色。识别并合并逻辑上跨场景相同的角色，即使它们有不同的名称或描述上略有差异。输出整个事件的合并角色列表。列表中的每个角色必须具有唯一标识符，以及他们出现的场景编号和在每个场景中使用的名称。您还需要汇总相同角色的静态特征。
+**TASK**
+Process the input scenes, each containing a script and characters with their names and features. Identify and merge characters that are logically the same across scenes, even if they have different names or slight variations in description. Output a consolidated list of characters for the entire event. Each character in the list must have a unique identifier, along with the scene numbers where they appear and the name used in each scene. You also need to aggregate the static features of the same characters together.
 
-**输入**
-一个场景序列。每个场景包含在<SCENE_N_START>和<SCENE_N_END>标签内，其中N是场景编号（从0开始）。
-每个场景包括一个剧本脚本和一个角色名称序列。
-剧本脚本包含在<SCRIPT_START>和<SCRIPT_END>标签内。
-角色序列包含在<CHARACTERS_START>和<CHARACTERS_END>标签内。列表中的每个角色包含在<CHARACTER_M_START>和<CHARACTER_M_END>标签内，其中M是角色编号（从0开始）。
+**INPUT**
+A sequence of scenes. Each scene is enclosed within <SCENE_N_START> and <SCENE_N_END> tags, where N is the scene number(starting from 0). 
+Each scene includes a screnplay script and a sequence of character names.
+The screenplay script is enclosed within <SCRIPT_START> and <SCRIPT_END> tags.
+The sequence of character is enclosed within <CHARACTERS_START> and <CHARACTERS_END> tags. Each character in the list is enclosed within <CHARACTER_M_START> and <CHARACTER_M_END> tags, where M is the character number(starting from 0).
 
-以下是一个场景的示例：
+Below is an example of one scene:
 
 <SCENE_0_START>
 
 <SCRIPT_START>
-约翰走进房间，看到玛丽。
-约翰：嗨，玛丽，你好吗？
-玛丽：我很好，约翰。谢谢关心！
+John enters the room and sees Mary.
+John: Hi Mary, how are you?
+Mary: I'm good, John. Thanks for asking!
 <SCRIPT_END>
 
 <CHARACTERS_START>
 
 <CHARACTER_0_START>
-约翰 [可见]
-静态特征：约翰是一个高个子男人，黑色短发，棕色眼睛。
-动态特征：穿着蓝色衬衫和黑色裤子。
+John [visible]
+static features: John is a tall man with short black hair and brown eyes.
+dynamic features: Wearing a blue shirt and black pants.
 <CHARACTER_0_END>
 
 <CHARACTER_1_START>
-玛丽 [可见]
-静态特征：玛丽是一个年轻女子，棕色长发，绿色眼睛。
-动态特征：穿着碎花裙和牛仔夹克。
+Mary [visible]
+static features: Mary is a young woman with long brown hair and green eyes.
+dynamic features: Wearing a floral dress and a denim jacket.
 <CHARACTER_1_END>
 
 <CHARACTERS_END>
@@ -55,16 +55,16 @@ system_prompt_template_merge_characters_across_scenes_in_event = \
 
 
 
-**输出**
+**OUTPUT**
 {format_instructions}
 
-**指南**
-1. 角色融合：分析上下文线索（例如，对话风格、在情节中的角色、关系、描述）以确定不同场景中的角色是否是同一人，即使名称不同。
-2. 唯一标识符：为每个合并的角色分配一个一致、唯一的ID（例如，主要/规范名称）。如果可能，使用最频繁或上下文最合适的名称作为标识符。
-3. 场景映射：对于每个角色，列出他们出现的所有场景以及在每个场景中使用的确切名称。
-4. 完整性：确保所有场景中的所有角色都包含在最终列表中。没有重复、遗漏或多余的角色。
-5. 如果一个角色在不同场景中经历显著变化，则需要将他们拆分为独立的角色。例如，如果角色A在场景0中是儿童，但在场景1中是成人，他们应被分为两个不同的角色（意味着需要两个不同的演员来扮演）。
-6. 输出值的语言应与输入文本的语言一致。
+**GUIDELINES**
+1. Character Fusion: Analyze contextual clues (e.g., dialogue style, role in plot, relationships, descriptions) to determine if characters from different scenes are the same person, even if names vary.
+2. Unique Identifier: Assign a consistent, unique ID (e.g., primary/canonical name) to each merged character. Use the most frequent or contextually appropriate name as the identifier, if possible.
+3. Scene Mapping: For each character, list all scenes they appear in and the exact name used in each scene.
+4. Completeness: Ensure all characters from all scenes are included in the final list. No duplicate, omitted, or extraneous characters.
+5. If a character undergoes significant changes across different scenes, it is necessary to split them into separate roles. For example, if Character A is a child in Scene 0 but an adult in Scene 1, they should be divided into two distinct characters (meaning two different actors are required to portray them).
+6. The language of outputs in values should be same as the input text.
 
 
 **重要:输出语言要求**

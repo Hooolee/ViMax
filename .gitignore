@@ -14,3 +14,4 @@ wheels/
 .test/
 
 venv/
+logs

@@ -14,56 +14,48 @@ from interfaces import ShotDescription, ShotBriefDescription, Camera, ImageOutpu
 
 from moviepy import VideoFileClip
 from PIL import Image
-from utils.prompt_logger import log_agent_prompt
 
 
 system_prompt_template_select_reference_camera = \
 """
-[角色]
-您是一名专业的视频编辑专家，专长于多机位镜头分析和场景结构建模。您具备深厚的影视语言知识，能够理解景别（如全景、中景、近景）和内容包含关系。您能够根据相应的镜头描述推断出机位之间的层级结构。
+[Role]
+You are a professional video editing expert specializing in multi-camera shot analysis and scene structure modeling. You have deep knowledge of cinematic language, enabling you to understand shot sizes (e.g., wide shot, medium shot, close-up) and content inclusion relationships. You can infer hierarchical structures between camera positions based on corresponding shot descriptions.
 
-[任务]
-您的任务是分析输入的机位数据，构建一个"机位树"。该树状结构表示父机位的内容包含子机位内容的关系。具体来说，您需要为每个机位识别其父机位（如果存在），并确定依赖的镜头索引（即父机位素材中包含子机位内容的具体镜头）。如果某个机位没有父机位，则输出None。
+[Task]
+Your task is to analyze the input camera position data to construct a "camera position tree". This tree structure represents a relationship where a parent camera's content encompasses that of a child camera. Specifically, you need to identify the parent camera for each camera position (if one exists) and determine the dependent shot indices (i.e., the specific shots within the parent camera's footage that contain the child camera's content). If a camera position has no parent, output None.
 
-[输入]
-输入是一个机位序列。该序列将包含在<CAMERA_SEQ>和</CAMERA_SEQ>标签内。
-每个机位包含由该摄像机拍摄的一系列镜头，这些镜头将包含在<CAMERA_N>和</CAMERA_N>标签内，其中N是机位的索引。
+[Input]
+The input is a sequence of cameras. The sequence will be enclosed within <CAMERA_SEQ> and </CAMERA_SEQ>.
+Each camera contains a sequence of shots filmed by the camera, which will be enclosed within <CAMERA_N> and </CAMERA_N>, where N is the index of the camera.
 
-以下是输入格式的示例：
+Below is an example of the input format:
 
 <CAMERA_SEQ>
 <CAMERA_0>
-镜头0：街道的中景镜头。爱丽丝和鲍勃正向彼此走来。
-镜头2：街道的中景镜头。爱丽丝和鲍勃互相拥抱。
+Shot 0: Medium shot of the street. Alice and Bob are walking towards each other.
+Shot 2: Medium shot of the street. Alice and Bob hug each other.
 </CAMERA_0>
 <CAMERA_1>
-镜头1：爱丽丝面部的特写镜头。当她认出鲍勃时，她的表情从惊讶转变为喜悦。
+Shot 1: Close-up of the Alice's face. Her expression shifts from surprise to delight as she recognizes Bob.
 </CAMERA_1>
 </CAMERA_SEQ>
 
 
-[输出]
+[Output]
 {format_instructions}
 
-[指南]
-- 所有输出值（不包括键）的语言应与输入的语言一致。
-- 内容包含性检查：父机位应在其某些镜头中尽可能完整地包含子机位的内容（例如，父机位的中景双人镜头包含子机位的过肩反打镜头）。通过比较关键词（如角色、动作、场景）分析镜头描述，以确保父镜头的视野覆盖子镜头的视野。
-- 转场流畅性优先：优先选择景别相同或更宽的父机位。避免剧烈的景别跳跃；除非绝对必要，不要直接将极远/远景与特写/大特写连接。尽可能保持相邻景别在两个级别以内。
-- 轴线一致性：使用`dir=`提示（左到右/右到左/朝向/远离/静态）遵守180度规则。优先选择方向与子机位匹配的父机位。
-- 距离/角度/焦距约束：考虑`angle=`和`focal=`（35mm等效焦距）。避免焦距跳跃超过约3倍或没有中间镜头的极端角度翻转。
-- 时间邻近性：每个机位由其对应的第一个镜头描述，父机位是基于第一个镜头的描述来定位的。父机位的镜头索引应尽可能接近子机位的第一个镜头索引。
-- 逻辑一致性：机位树应是无环的，避免循环依赖。如果一个机位被多个潜在的父机位包含，则选择最佳匹配（基于景别和内容）。如果没有合适的父机位，则输出None。
-- 当没有更广的视角可用时，选择具有最大重叠视野的镜头作为父镜头（信息重叠最多的那个），或者一个镜头也可以作为反打镜头的父镜头。当两个机位可以互为父机位时，选择索引较小的机位作为索引较大机位的父机位。
-- 只能有一个机位没有父机位。
-- 当描述镜头中丢失的元素时，仔细比较父镜头和子镜头之间的细节。例如，父镜头是角色A和角色B面对面的中景（两者均为侧对摄像机），而子镜头是角色A的特写（角色A正对摄像机）。在这种情况下，子镜头缺少角色A的正面视角信息。
-- 第一个机位必须是机位树的根节点。
-
-
-**重要:输出语言要求**
-- 所有输出的值(value)字段必须使用中文
-- JSON的键(key)保持英文不变
-- 所有描述性内容、故事内容、对话内容等都必须用中文输出
-
+[Guidelines]
+- The language of all output values (not include keys) should be consistent with the language of the input.
+- Content Inclusion Check: The parent camera should as fully as possible contain the child camera's content in certain shots (e.g., a parent medium two-shot encompasses a child over-the-shoulder reverse shot). Analyze shot descriptions by comparing keywords (e.g., characters, actions, setting) to ensure the parent shot's field of view covers the child shot's.
+- Transition Smoothness Priority: Prefer parents with equal or wider framing. Avoid drastic jumps; do NOT directly connect extreme_long/long to close_up/extreme_close_up unless absolutely necessary. Keep adjacent sizes within two levels when possible.
+- Axis Consistency: Respect the 180-degree rule using `dir=` hints (L_to_R / R_to_L / toward / away / static). Prefer a parent whose direction matches the child.
+- Distance/Angle/Focal Restraints: Consider `angle=` and `focal=` (35mm equivalent). Avoid jumps greater than ~3x focal length or extreme angle flips without an intermediate.
+- Temporal Proximity: Each camera is described by its corresponding first shot, and the parent camera is located based on the description of the first shot. The shot index of the parent camera should be as close as possible to the first shot index of the child camera.
+- Logical Consistency: The camera tree should be acyclic, avoid circular dependencies. If a camera is contained by multiple potential parents, select the best match (based on shot size and content). If there is no suitable parent camera, output None.
+- When a broader perspective is not available, choose the shot with the largest overlapping field of view as the parent (the one with the most information overlap), or a shot can also serve as the parent of a reverse shot. When two cameras can be the parent of each other, choose the one with the smaller index as the parent of the camera with the larger index.
+- Only one camera can exist without a parent.
+- When describing the elements lost in a shot, carefully compare the details between the parent shot and the child shot. For example, the parent shot is a medium shot of Character A and Character B facing each other (both in profile to the camera), while the child shot is a close-up of Character A (with Character A facing the camera directly). In this case, the child shot lacks the frontal view information of Character A.
+- The first camera must be the root of the camera tree.
 """
 
 
@@ -150,46 +142,6 @@ class CameraImageGenerator:
             SystemMessage(content=system_prompt_template_select_reference_camera.format(format_instructions=parser.get_format_instructions())),
             HumanMessage(content=human_prompt_template_select_reference_camera.format(camera_seq_str=camera_seq_str)),
         ]
-
-
-
-        # 记录提示词到日志文件
-
-
-        log_agent_prompt(
-
-
-            agent_name="CameraImageGenerator",
-
-
-            prompt_type="system",
-
-
-            prompt_content=messages[0].content,
-
-
-            metadata={"method": "construct_camera_tree", "model": str(self.chat_model)}
-
-
-        )
-
-
-        log_agent_prompt(
-
-
-            agent_name="CameraImageGenerator",
-
-
-            prompt_type="human",
-
-
-            prompt_content=messages[1].content,
-
-
-            metadata={"method": "construct_camera_tree"}
-
-
-        )
 
         chain = self.chat_model | parser
         response: CameraTreeResponse = await chain.ainvoke(messages)

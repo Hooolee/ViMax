@@ -12,26 +12,26 @@ from tenacity import retry, stop_after_attempt
 from interfaces import CharacterInScene, CharacterAppearance, ImageOutput
 from langchain_core.messages import HumanMessage, SystemMessage
 from utils.retry import after_func
-from utils.prompt_logger import log_agent_prompt
 
 
 
 prompt_template_front = \
 """
-根据以下描述生成角色 {identifier} 的全身正面肖像，使用纯白色背景。角色应位于图像中心，占据画面大部分空间。直视前方。站立姿势，双臂放松置于身体两侧。{emotional_expression}
-特征：{features}
-风格：{style}
+Generate a full-body, front-view portrait of character {identifier} based on the following description, with a pure white background. The character should be centered in the image, occupying most of the frame. Gazing straight ahead. Standing with arms relaxed at sides. {emotional_expression}
+Features: {features}
+Style: {style}
 """
 
 prompt_template_side = \
 """
-根据提供的正面肖像，生成角色 {identifier} 的全身侧面肖像，使用纯白色背景。角色应位于图像中心，占据画面大部分空间。面向左侧。站立姿势，双臂放松置于身体两侧。{emotional_expression}
+Generate a full-body, side-view portrait of character {identifier} based on the provided front-view portrait, with a pure white background. The character should be centered in the image, occupying most of the frame. Facing left. Standing with arms relaxed at sides. {emotional_expression}
 """
 
 prompt_template_back = \
 """
-根据提供的正面肖像，生成角色 {identifier} 的全身背面肖像，使用纯白色背景。角色应位于图像中心，占据画面大部分空间。不应可见面部特征。
+Generate a full-body, back-view portrait of character {identifier} based on the provided front-view portrait, with a pure white background. The character should be centered in the image, occupying most of the frame. No facial features should be visible.
 """
+
 
 # 情绪状态到表情的映射
 EMOTIONAL_EXPRESSIONS = {

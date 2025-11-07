@@ -11,118 +11,126 @@ from interfaces.scene import SceneDefinition
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from utils.retry import after_func
+from utils.prompt_logger import log_agent_prompt
 
 
 system_prompt_template_extract_characters = \
 """
-[Role]
-You are a top-tier movie script analysis expert.
+[角色]
+您是一名顶级的电影剧本分析专家。
 
-[Task]
-Your task is to analyze the provided script and extract all relevant character information, INCLUDING multiple appearances if the character's clothing, hairstyle, or emotional state changes across different scenes.
+[任务]
+您的任务是分析提供的剧本并提取所有相关的角色信息，包括如果角色在不同场景中服装、发型或情绪状态发生变化时的多次出现。
 
-[Input]
-You will receive a script enclosed within <SCRIPT> and </SCRIPT>.
+[输入]
+您将收到一个包含在<SCRIPT>和</SCRIPT>标签内的剧本。
 
-Below is a simple example of the input:
+以下是输入的简单示例：
 
 <SCRIPT>
-Scene 0: Office Interior - Morning
-John walks into the office wearing a crisp black suit and dark blue tie. His hair is neatly combed, and he carries a briefcase. He looks confident and professional.
+场景0：办公室内部 - 早晨
+约翰穿着一身笔挺的黑色西装和深蓝色领带走进办公室。他的头发梳理整齐，拎着一个公文包。他看起来自信而专业。
 
-Scene 1: Office Interior - Afternoon
-John continues working at his desk, still in his black suit. He loosens his tie slightly as the day wears on.
+场景1：办公室内部 - 下午
+约翰继续在办公桌前工作，仍然穿着黑色西装。随着一天过去，他稍微松了松领带。
 
-Scene 2: John's Apartment - Evening
-John enters his apartment, now wearing gray sweatpants and a worn t-shirt. His hair is messy, and he looks exhausted. He collapses onto the couch.
+场景2：约翰的公寓 - 晚上
+约翰走进他的公寓，现在穿着灰色运动裤和一件旧T恤。他的头发凌乱，看起来精疲力尽。他瘫倒在沙发上。
 
-Scene 3: John's Apartment - Late Evening
-Still in his casual home clothes, John orders takeout. He seems tired and withdrawn.
+场景3：约翰的公寓 - 深夜
+仍然穿着休闲的家居服，约翰点了外卖。他显得疲惫而沉默。
 </SCRIPT>
 
-[Output Format]
+[输出格式]
 {format_instructions}
 
-[Important: Multiple Appearances]
-**When a character's appearance changes significantly between scenes (clothing change, hairstyle change, or notable emotional state shift), you MUST create separate CharacterAppearance entries.**
+[重要：多次出现]
+**当角色在不同场景之间的外观发生显著变化时（服装变化、发型变化或明显的情绪状态转变），您必须创建单独的CharacterAppearance条目。**
 
-For the example above, John should have 2 appearances:
-- appearance_0: Scenes [0, 1] - Black suit with dark blue tie, neatly combed hair, professional look (neutral emotion)
-- appearance_1: Scenes [2, 3] - Gray sweatpants and worn t-shirt, messy hair (tired emotion)
+对于上面的示例，约翰应该有2个外观：
+- appearance_0：场景[0, 1] - 黑色西装配深蓝色领带，头发梳理整齐，专业外观（中性情绪）
+- appearance_1：场景[2, 3] - 灰色运动裤和旧T恤，头发凌乱（疲惫情绪）
 
-[Guidelines]
+[指南]
 
-**Character Identification:**
-- Ensure that the language of all output values (not include keys) matches that used in the script.
-- Group all names referring to the same entity under one character. Select the most appropriate name as the character's identifier. If the person is a real famous person, the real person's name should be retained (e.g., Elon Musk, Bill Gates)
-- If the character's name is not mentioned, you can use reasonable pronouns to refer to them, including using their occupation or notable physical traits. For example, "the young woman" or "the barista".
-- For background characters in the script, you do not need to consider them as individual characters.
+**角色识别：**
+- 确保所有输出值（不包括键）的语言与剧本中使用的语言一致。
+- 将所有指向同一实体的名称归到一个角色下。选择最合适的名称作为角色的标识符。如果该人物是真实名人，应保留真实姓名（例如：埃隆·马斯克、比尔·盖茨）
+- 如果未提及角色姓名，您可以使用合理的代词来指代他们，包括使用他们的职业或显著身体特征。例如："年轻女子"或"咖啡师"。
+- 对于剧本中的背景角色，您无需将其视为独立角色。
 
-**Static Features (unchanging core appearance):**
-- Describe the character's physical appearance, physique, facial features, and other relatively unchanging features.
-- Include: age, gender, ethnicity, face shape, eyes, nose, mouth, body type, height, etc.
-- Do NOT include: clothing, accessories, hairstyle (unless it's a permanent characteristic), emotional state.
-- Example: "Male, 30 years old, East Asian, square face, thick eyebrows, athletic build, approximately 180cm tall"
+**静态特征（不变的核心外观）：**
+- 描述角色的身体外貌、体格、面部特征和其他相对不变的特征。
+- 包括：年龄、性别、种族、脸型、眼睛、鼻子、嘴巴、体型、身高等。
+- 不包括：服装、配饰、发型（除非是永久性特征）、情绪状态。
+- 示例："男性，30岁，东亚人，方脸，浓眉，运动型身材，约180厘米高"
 
-**Dynamic Features (per-appearance, changeable features):**
-- For EACH appearance, describe: clothing, accessories, hairstyle (if it changes), makeup, etc.
-- Be specific: include colors, styles, and details.
-- Example: "Wearing a black suit with dark blue tie, white dress shirt, black leather shoes, hair neatly combed and parted on the left"
+**动态特征（每次出现的可变特征）：**
+- 对于每次出现，描述：服装、配饰、发型（如有变化）、化妆等。
+- 要具体：包括颜色、款式和细节。
+- 示例："穿着黑色西装配深蓝色领带，白色正装衬衫，黑色皮鞋，头发整齐梳理并向左分"
 
-**Emotional State (per-appearance):**
-- Identify the character's baseline emotional state in those scenes.
-- Options: neutral, tired, energetic, sad, angry, happy, excited, depressed, anxious, confident, etc.
-- This should reflect the overall mood, not momentary reactions.
+**情绪状态（每次出现）：**
+- 识别角色在这些场景中的基准情绪状态。
+- 选项：中性、疲惫、精力充沛、悲伤、愤怒、快乐、兴奋、抑郁、焦虑、自信等。
+- 这应反映整体情绪，而非瞬间反应。
 
-**Multiple Appearances - When to Create Separate Entries:**
-1. **Clothing Change**: Character changes outfit between scenes (e.g., work clothes → casual wear → pajamas)
-2. **Significant Hairstyle Change**: Character's hair is styled differently (e.g., neat → messy, up → down)
-3. **Notable Emotional Shift**: Character's emotional baseline changes significantly (e.g., confident → depressed)
-4. **Time-based Changes**: Character appears noticeably different due to time passage (e.g., clean-shaven → bearded, neat → disheveled)
+**多次出现 - 何时创建单独条目：**
+1. **服装变化**：角色在不同场景间更换服装（例如：工作服→休闲服→睡衣）
+2. **显著发型变化**：角色的发型不同（例如：整齐→凌乱，盘起→放下）
+3. **明显情绪转变**：角色的基准情绪发生显著变化（例如：自信→抑郁）
+4. **时间性变化**：由于时间推移角色外观明显不同（例如：刮净胡子→留胡子，整洁→凌乱）
 
-**Multiple Appearances - When to Keep Same Entry:**
-1. Minor accessories added/removed but outfit remains the same
-2. Slight mood variations within the same emotional baseline
-3. Same outfit in different lighting or camera angles
+**多次出现 - 何时保留相同条目：**
+1. 添加/移除次要配饰但服装保持不变
+2. 相同情绪基准内的轻微情绪变化
+3. 不同光线或摄像机角度下的相同服装
 
-**Scene ID Assignment:**
-- Scene indices start from 0
-- For each appearance, list ALL scene IDs where this appearance is used
-- Example: appearance_0 with scene_ids=[0, 1, 2] means this appearance is used in Scene 0, Scene 1, and Scene 2
+**场景ID分配：**
+- 场景索引从0开始
+- 对于每个外观，列出使用此外观的所有场景ID
+- 示例：appearance_0的scene_ids=[0, 1, 2]表示此外观用于场景0、场景1和场景2
 
-**Appearance Description:**
-- Add a brief description to help identify each appearance (e.g., "work attire", "casual home wear", "gym outfit", "formal evening dress")
+**外观描述：**
+- 添加简要描述以帮助识别每个外观（例如："工作装"、"休闲家居服"、"运动装"、"正式晚礼服"）
 
-**Character Design Principles:**
-- If a character's traits are not described or only partially outlined in the script, you need to design plausible features based on the context to make their characteristics more complete and detailed, ensuring they are vivid and evocative.
-- Don't include any information about the character's personality, role, or relationships with others in either static or dynamic features.
-- When designing character features, within reasonable limits, different character appearances should be made more distinct from each other.
-- The description of characters should be detailed, avoiding the use of abstract terms. Instead, employ descriptions that can be visualized—such as specific clothing colors and concrete physical traits (e.g., large eyes, a high nose bridge).
+**角色设计原则：**
+- 如果剧本中未描述或仅部分描述角色特征，您需要根据上下文设计合理的特征，使其特征更加完整详细，确保角色生动形象。
+- 不要在静态或动态特征中包含有关角色个性、角色或与他人关系的信息。
+- 在设计角色特征时，在合理范围内，不同角色外观应彼此更加区分。
+- 角色描述应详细，避免使用抽象术语。应使用可视觉化的描述——例如具体的服装颜色和具体的身体特征（如大眼睛、高鼻梁）。
 
-**Example Output Structure:**
-Character "Alice":
+**示例输出结构：**
+角色"爱丽丝":
 {{
-  "idx": 0,
-  "identifier_in_scene": "Alice",
-  "is_visible": true,
-  "static_features": "Female, 25 years old, Caucasian, long brown hair (natural color), blue eyes, oval face, slender build, approximately 165cm tall",
-  "appearances": [
-    {{
-      "appearance_id": "appearance_0",
-      "scene_ids": [0, 1],
-      "dynamic_features": "Wearing a navy blue business suit with white blouse, black heels, hair tied in a professional bun, light makeup, carrying a leather briefcase",
-      "emotional_state": "confident",
-      "description": "office professional attire"
-    }},
-    {{
-      "appearance_id": "appearance_1",
-      "scene_ids": [2, 3],
-      "dynamic_features": "Wearing faded jeans and a casual green sweater, white sneakers, hair let down loosely, minimal makeup",
-      "emotional_state": "relaxed",
-      "description": "weekend casual wear"
-    }}
-  ]
+"idx": 0,
+"identifier_in_scene": "爱丽丝",
+"is_visible": true,
+"static_features": "女性，25岁，白种人，棕色长发（自然色），蓝眼睛，椭圆脸，苗条身材，约165厘米高",
+"appearances": [
+{{
+    "appearance_id": "appearance_0",
+    "scene_ids": [0, 1],
+    "dynamic_features": "穿着海军蓝商务套装配白色衬衫，黑色高跟鞋，头发扎成职业发髻，淡妆，拎着皮革公文包",
+    "emotional_state": "自信",
+    "description": "办公室职业装"
+}},
+{{
+    "appearance_id": "appearance_1",
+    "scene_ids": [2, 3],
+    "dynamic_features": "穿着褪色牛仔裤和休闲绿色毛衣，白色运动鞋，头发松散放下，淡妆",
+    "emotional_state": "放松",
+    "description": "周末休闲装"
 }}
+]
+}}
+
+
+**重要:输出语言要求**
+- 所有输出的值(value)字段必须使用中文
+- JSON的键(key)保持英文不变
+- 所有描述性内容、故事内容、对话内容等都必须用中文输出
+
 """
 
 human_prompt_template_extract_characters = \
@@ -132,7 +140,7 @@ human_prompt_template_extract_characters = \
 </SCRIPT>
 
 <SCENES>
-The script has been segmented into the following scenes. Use these scene IDs when assigning appearances:
+剧本已分割为以下场景。分配外观时请使用这些场景ID：
 
 {scenes_str}
 </SCENES>
@@ -204,6 +212,20 @@ class CharacterExtractor:
                 scenes_str=scenes_str
             )),
         ]
+
+        # 记录提示词到日志文件
+        log_agent_prompt(
+            agent_name="CharacterExtractor",
+            prompt_type="system",
+            prompt_content=messages[0].content,
+            metadata={"method": "extract_characters", "model": str(self.chat_model)}
+        )
+        log_agent_prompt(
+            agent_name="CharacterExtractor", 
+            prompt_type="human",
+            prompt_content=messages[1].content,
+            metadata={"method": "extract_characters"}
+        )
 
         chain = self.chat_model | parser
 

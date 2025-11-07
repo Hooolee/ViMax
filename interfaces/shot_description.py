@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional, Literal, Tuple
+from typing import List, Optional, Literal, Tuple, Dict
 
 
 class ShotBriefDescription(BaseModel):
@@ -36,6 +36,17 @@ class ShotBriefDescription(BaseModel):
         description="Shot size category describing framing scale.",
         examples=["medium", "close_up", "long"],
     )
+    
+    @field_validator('shot_size', mode='before')
+    @classmethod
+    def normalize_shot_size(cls, v):
+        """Normalize shot_size values to handle common variations."""
+        if isinstance(v, str):
+            # Convert "medium_close_up" to "medium_close"
+            if v == "medium_close_up":
+                return "medium_close"
+        return v
+    
     angle: Literal[
         "low",
         "eye_level",
@@ -201,6 +212,17 @@ class ShotDescription(BaseModel):
         description="Shot size category describing framing scale.",
         examples=["medium", "close_up", "long"],
     )
+    
+    @field_validator('shot_size', mode='before')
+    @classmethod
+    def normalize_shot_size(cls, v):
+        """Normalize shot_size values to handle common variations."""
+        if isinstance(v, str):
+            # Convert "medium_close_up" to "medium_close"
+            if v == "medium_close_up":
+                return "medium_close"
+        return v
+    
     angle: Literal["low", "eye_level", "high", "bird_eye", "worm_eye", "dutch"] = Field(
         description="Primary camera angle relative to the subject/ground.",
         examples=["eye_level", "low", "high"],
@@ -278,12 +300,30 @@ class ShotDescription(BaseModel):
             [],
         ],
     )
+    ff_char_orientations: Optional[Dict[int, Literal["front", "side", "back"]]] = Field(
+        default=None,
+        description="The orientation/facing direction of each visible character in the first frame. Key is character index, value is orientation (front/side/back relative to camera).",
+        examples=[
+            {0: "front", 1: "side"},
+            {0: "back"},
+            {},
+        ],
+    )
     lf_desc: str = Field(
         description="The last frame of the shot.",
     )
     lf_vis_char_idxs: List[int] = Field(
         default=[],
         description="The indices of the characters in the last frame.",
+    )
+    lf_char_orientations: Optional[Dict[int, Literal["front", "side", "back"]]] = Field(
+        default=None,
+        description="The orientation/facing direction of each visible character in the last frame. Key is character index, value is orientation (front/side/back relative to camera).",
+        examples=[
+            {0: "front", 1: "side"},
+            {0: "back"},
+            {},
+        ],
     )
     motion_desc: str = Field(
         description='''The motion description of the shot.
