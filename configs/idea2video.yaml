@@ -14,6 +14,6 @@ image_generator:
 video_generator:
   class_path: tools.VideoGeneratorDoubaoSeedanceOfficialAPI
   init_args:
-    api_key: ab2ffe0d-3449-4baa-b79d-6d4c9eb03432
+    api_key: 
 
 working_dir: .working_dir/idea2video
